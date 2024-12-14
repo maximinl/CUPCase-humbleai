@@ -8,3 +8,7 @@ This repository is comprised of three main components:
 * utils, preprocess - for general utilis and preprocessing of the CUPCase dataset
 To use any of the above, follow the specific readme files in each.
 
+The dataset is available on huggingface - https://huggingface.co/datasets/ofir408/CupCase
+
+The CUPCase paper was accepted to AAAI 2025, and will be published soon.
+
