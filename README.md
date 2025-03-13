@@ -10,5 +10,17 @@ To use any of the above, follow the specific readme files in each.
 
 The dataset is available on huggingface - https://huggingface.co/datasets/ofir408/CupCase
 
-The CUPCase paper was accepted to AAAI 2025, and will be published soon.
+The CUPCase paper was accepted to AAAI 2025.
+Paper Link: https://arxiv.org/abs/2503.06204
 
+## Citation:
+If you use CupCase or find this repository useful for your research or work, please cite us using the following citation:
+
+```
+@article{perets2025cupcase,
+  title={CUPCase: Clinically Uncommon Patient Cases and Diagnoses Dataset},
+  author={Perets, Oriel and Shoham, Ofir Ben and Grinberg, Nir and Rappoport, Nadav},
+  journal={arXiv preprint arXiv:2503.06204},
+  year={2025}
+}
+```
