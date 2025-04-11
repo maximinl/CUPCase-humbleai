@@ -6,6 +6,7 @@ Install the required dependencies:
 git clone https://github.com/nadavlab/CUPCase
 cd lm_eval_evaluation
 pip install -e .
+export DATA_SEED=42
 ```
 
 Run the benchmark evaluation:
