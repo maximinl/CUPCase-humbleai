@@ -18,10 +18,13 @@ Paper Link: https://arxiv.org/abs/2503.06204
 If you use CupCase or find this repository useful for your research or work, please cite us using the following citation:
 
 ```
-@article{perets2025cupcase,
+@inproceedings{perets2025cupcase,
   title={CUPCase: Clinically Uncommon Patient Cases and Diagnoses Dataset},
   author={Perets, Oriel and Shoham, Ofir Ben and Grinberg, Nir and Rappoport, Nadav},
-  journal={arXiv preprint arXiv:2503.06204},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={39},
+  number={27},
+  pages={28293--28301},
   year={2025}
 }
 ```
