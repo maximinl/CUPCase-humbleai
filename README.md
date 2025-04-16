@@ -12,7 +12,7 @@ The dataset is available on huggingface - https://huggingface.co/datasets/ofir40
 
 The CUPCase paper was accepted to AAAI 2025.
 
-Paper Link: https://arxiv.org/abs/2503.06204
+Paper Link: https://ojs.aaai.org/index.php/AAAI/article/view/35050
 
 ## Citation:
 If you use CupCase or find this repository useful for your research or work, please cite us using the following citation:
