@@ -1,4 +1,4 @@
-## CUPCase: Clinically Uncommon Patient Cases and Diagnoses Dataet
+## CUPCase: Investigating Complex Disease Diagnosis With Large Language Models 
 
 This is the official repository for the CUPCase paper and dataset.
 
