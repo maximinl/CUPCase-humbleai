@@ -1,0 +1,24 @@
+# Requirements for Pre-Mortem Selective Analysis
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+pandas>=2.0.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+
+# OpenAI API
+openai>=1.0.0
+
+# Evaluation metrics
+bert-score>=0.3.13
+transformers>=4.30.0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Optional: for token truncation (fallback to character-based if not available)
+# tokenizers>=0.13.0
