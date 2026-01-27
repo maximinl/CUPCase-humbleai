@@ -186,13 +186,13 @@ class TestMCQEvaluation:
     """Tests for MCQ task type."""
 
     def test_mcq_with_options(
-        self, mock_openai_client, premortem_enabled_config, sample_cases
+        self, mock_openai_client_with_responses, premortem_enabled_config, sample_cases
     ):
         """MCQ evaluation works with options."""
-        # Make mock return a valid MCQ answer
-        mock_openai_client.chat.completions.create.return_value.choices[0].message.content = "1"
+        client, set_responses = mock_openai_client_with_responses
+        set_responses(["1", "1"])  # MCQ responses for pass 1 and pass 2
 
-        engine = BeliefRevisionEngine(mock_openai_client, premortem_enabled_config)
+        engine = BeliefRevisionEngine(client, premortem_enabled_config)
         case = sample_cases["simple"]
         options = [case["true_diagnosis"]] + case["distractors"]
 
