@@ -284,7 +284,7 @@ class BeliefRevisionEngine:
             )
 
         response = self._call_llm(prompt)
-        diagnosis = response.strip()
+        diagnosis = PreMortemPrompts.parse_final_diagnosis(response, task_type)
 
         # Default confidence for Pass 2 (full information)
         confidence = 0.8

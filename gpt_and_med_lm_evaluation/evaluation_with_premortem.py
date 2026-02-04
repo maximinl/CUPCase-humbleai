@@ -30,6 +30,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from judge.deepseek_judge import judge_answer
+
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
@@ -155,6 +157,8 @@ Examples:
         help='Enable verbose output'
     )
 
+
+    parser.add_argument('--llm-judge', action='store_true', help='Use DeepSeek LLM judge for free-text correctness')
     return parser.parse_args()
 
 
@@ -190,7 +194,7 @@ def load_data(args: argparse.Namespace) -> pd.DataFrame:
     print("Generating token-truncated columns...")
     try:
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B")
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
         def truncate_text_by_tokens(text: str, percentage: float) -> str:
             """Truncate text to a percentage of its tokens."""
@@ -216,6 +220,7 @@ def evaluate_batch_with_premortem(
     batch: pd.DataFrame,
     engine: BeliefRevisionEngine,
     task: str,
+    args: argparse.Namespace,
     verbose: bool = False
 ) -> List[Dict[str, Any]]:
     """
@@ -263,6 +268,7 @@ def evaluate_batch_with_premortem(
 
             # Build result record
             record = {
+                'case_id': idx,
                 'case_presentation': case_full[:500] + '...' if len(case_full) > 500 else case_full,
                 'true_diagnosis': true_diagnosis,
                 'initial_hypothesis': result.initial_hypothesis,
@@ -276,6 +282,23 @@ def evaluate_batch_with_premortem(
                 'revision_magnitude': result.revision_magnitude,
                 'latency_total_ms': sum(result.latency_ms.values()),
             }
+
+            # Optional LLM-based judging (free_text only)
+            # Adds: judge_correct, judge_confidence, judge_rationale
+            if task == 'free_text' and getattr(args, 'llm_judge', False):
+                try:
+                    judge_out = judge_answer(
+                        case=case_full,
+                        prediction=result.final_diagnosis,
+                        gold=true_diagnosis
+                    )
+                    record['judge_correct'] = bool(judge_out.get('correct'))
+                    record['judge_confidence'] = float(judge_out.get('confidence', 0.5))
+                    record['judge_rationale'] = str(judge_out.get('rationale', ''))
+                except Exception as e:
+                    record['judge_correct'] = None
+                    record['judge_confidence'] = None
+                    record['judge_rationale'] = f'judge_error: {e}'
 
             # Add task-specific fields
             if task == 'mcq':
@@ -325,6 +348,7 @@ def evaluate_batch_baseline(
     batch: pd.DataFrame,
     client: OpenAI,
     task: str,
+    args: argparse.Namespace,
     model: str = 'gpt-4o',
     verbose: bool = False
 ) -> List[Dict[str, Any]]:
@@ -335,6 +359,7 @@ def evaluate_batch_baseline(
         batch: DataFrame batch to evaluate
         client: OpenAI client instance
         task: Task type ("mcq" or "free_text")
+        args: Command line arguments
         model: Model name to use
         verbose: Enable verbose output
 
@@ -386,6 +411,7 @@ def evaluate_batch_baseline(
             generated = response.choices[0].message.content.strip()
 
             record = {
+                'case_id': idx,
                 'case_presentation': case_full[:500] + '...' if len(case_full) > 500 else case_full,
                 'true_diagnosis': true_diagnosis,
                 'final_diagnosis': generated,
@@ -403,6 +429,22 @@ def evaluate_batch_baseline(
                 record['correct'] = (correct_idx == pred_idx)
             else:
                 record['generated_diagnosis'] = generated
+
+            # LLM judge for free_text (same logic as premortem path)
+            if task == 'free_text' and getattr(args, 'llm_judge', False):
+                try:
+                    judge_out = judge_answer(
+                        case=case_full,
+                        prediction=generated,
+                        gold=true_diagnosis
+                    )
+                    record['judge_correct'] = bool(judge_out.get('correct'))
+                    record['judge_confidence'] = float(judge_out.get('confidence', 0.5))
+                    record['judge_rationale'] = str(judge_out.get('rationale', ''))
+                except Exception as e:
+                    record['judge_correct'] = None
+                    record['judge_confidence'] = None
+                    record['judge_rationale'] = f'judge_error: {e}'
 
             results.append(record)
 
@@ -425,6 +467,7 @@ def evaluate_batch_baseline(
         time.sleep(1)
 
     return results
+
 
 
 def compute_metrics(results: List[Dict], task: str) -> Dict[str, float]:
@@ -578,12 +621,10 @@ def main():
 
         # Evaluate batch
         if enable_premortem:
-            batch_results = evaluate_batch_with_premortem(
-                batch, engine, args.task, args.verbose
-            )
+            batch_results = evaluate_batch_with_premortem(batch, engine, args.task, args, args.verbose)
         else:
             batch_results = evaluate_batch_baseline(
-                batch, client, args.task, args.model, args.verbose
+                batch, client, args.task, args, args.model, args.verbose
             )
 
         all_results.extend(batch_results)

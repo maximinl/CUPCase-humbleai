@@ -334,3 +334,59 @@ Diagnosis:"""
             recommendation=result['recommendation'],
             raw_response=response
         )
+
+    @staticmethod
+    def parse_final_diagnosis(response: str, task_type: str = "free_text") -> str:
+        """
+        Extract just the diagnosis from belief revision response.
+        
+        Handles formats like:
+        - "FINAL ANSWER: Diagnosis here"
+        - "**BELIEF REVISION LOG:** ... FINAL ANSWER: Diagnosis"
+        - Raw diagnosis text
+        
+        Args:
+            response: Raw response from model
+            task_type: "mcq" or "free_text"
+            
+        Returns:
+            Extracted diagnosis string
+        """
+        text = response.strip()
+        
+        # Try to find "FINAL ANSWER:" marker
+        markers = ["FINAL ANSWER:", "Final Answer:", "FINAL_ANSWER:", "Final answer:"]
+        for marker in markers:
+            if marker in text:
+                diagnosis = text.split(marker, 1)[1].strip()
+                # Clean up any trailing sections
+                for stop in ["\n\n", "BELIEF", "Note:", "Explanation:"]:
+                    if stop in diagnosis:
+                        diagnosis = diagnosis.split(stop)[0].strip()
+                return diagnosis
+        
+        # Try to find diagnosis after numbered list (e.g., "1. The full case does not...")
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            # Look for a clean diagnosis line (not starting with log/analysis markers)
+            line_stripped = line.strip()
+            if line_stripped and not any(line_stripped.startswith(x) for x in [
+                "1.", "2.", "3.", "-", "*", "BELIEF", "Initial", "Final confidence", "Key information"
+            ]):
+                # This might be the diagnosis
+                if len(line_stripped) > 10 and len(line_stripped) < 500:
+                    return line_stripped
+        
+        # Last resort: if response is short and clean, return as is
+        if len(text) < 200 and "BELIEF REVISION" not in text.upper():
+            return text
+        
+        # If nothing worked, try to get last meaningful line
+        for line in reversed(lines):
+            line = line.strip()
+            if line and len(line) > 10 and not line.startswith(("-", "*", "BELIEF")):
+                return line
+        
+        return text  # Give up, return original
+
+

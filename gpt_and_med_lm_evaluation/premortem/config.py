@@ -67,9 +67,11 @@ class PreMortemConfig:
     def __post_init__(self):
         """Initialize default premortem quadrants if not provided."""
         if not self.premortem_quadrants:
-            # Por defecto, Pre-Mortem en cuadrantes de alto riesgo
+            # Always trigger Pre-Mortem on all quadrants
             self.premortem_quadrants = [
+                RiskQuadrant.ROUTINE,
                 RiskQuadrant.WATCHFUL,
+                RiskQuadrant.CURIOSITY,
                 RiskQuadrant.ESCALATE
             ]
 
