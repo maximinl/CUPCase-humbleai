@@ -1,52 +1,39 @@
-import os, json, pandas as pd, re, asyncio, argparse
+import os
+import json
+import pandas as pd
+import re
+import asyncio
+import argparse
 from openai import AsyncOpenAI
-import requests
 from tqdm.asyncio import tqdm
 import nest_asyncio
 
-# Apply nest_asyncio to allow nested event loops in Colab
 nest_asyncio.apply()
 
-# Initialize Async Clients
 openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
-deepseek_client = AsyncOpenAI(
-    api_key=os.environ.get('DEEPSEEK_API_KEY'),
-    base_url="https://api.deepseek.com"
-)
-
-# Limit concurrency
 sem = asyncio.Semaphore(5)
 
 def clean_json_string(s):
-    """Extracts the first JSON-like block from a string."""
     s = re.sub(r"```json\s*|\s*```", "", s, flags=re.I)
-    start = s.find('{')
-    end = s.rfind('}')
-    if start != -1 and end != -1:
-        return s[start:end+1]
-    return s.strip()
-
-async def get_candidates(case_text):
-    prompt = f"CASE: {case_text}\n\nTASK: Provide the single most likely diagnosis. Be concise.\nDIAGNOSIS:"
-    async with sem:
-        try:
-            tasks = [
-                openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0),
-                deepseek_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}], temperature=0)
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception:
-            return ["Error"]
-    
-    candidates = []
-    for r in results:
-        if not isinstance(r, Exception):
-            candidates.append(r.choices[0].message.content.strip())
-    return list(set(candidates))
+    start, end = s.find('{'), s.rfind('}')
+    return s[start:end+1] if start != -1 and end != -1 else s.strip()
 
 async def perform_audit(case_text, candidates):
     candidate_str = "\n".join([f"- {c}" for c in candidates])
-    prompt = f"CASE: {case_text}\n\nDIFFERENTIAL:\n{candidate_str}\n\nTASK: Perform a 'For and Against' audit. Respond ONLY with valid JSON: {{\"final_decision\": \"...\", \"rationale\": \"...\"}}"
+    prompt = f"""CASE: {case_text}
+
+DIFFERENTIAL DIAGNOSES:
+{candidate_str}
+
+TASK: Perform a 'For and Against' audit for each diagnosis. Then select the most likely.
+
+Respond ONLY with valid JSON:
+{{
+    "audit": [{{"diagnosis": "...", "evidence_for": ["..."], "evidence_against": ["..."]}}],
+    "final_decision": "most likely diagnosis",
+    "confidence": 0.0-1.0,
+    "rationale": "brief explanation"
+}}"""
     
     async with sem:
         try:
@@ -56,43 +43,56 @@ async def perform_audit(case_text, candidates):
                 response_format={"type": "json_object"},
                 temperature=0
             )
-            raw_content = res.choices[0].message.content
-            return json.loads(clean_json_string(raw_content))
-        except Exception:
-            return {"final_decision": "Error", "rationale": "API Failure"}
+            return json.loads(clean_json_string(res.choices[0].message.content))
+        except Exception as e:
+            return {"final_decision": "Error", "confidence": 0, "rationale": str(e)}
 
-async def process_case(row):
+async def process_case(case_id, row):
     case_text = row.get('clean text') or row.get('100%') or ""
     gold = row.get('final diagnosis', 'Unknown')
     
-    candidates = await get_candidates(case_text)
-    audit = await perform_audit(case_text, candidates)
-    pred = audit.get('final_decision', "Unknown")
+    # For Stage 2 standalone: just use GPT-4o as single candidate
+    candidates = [row.get('gpt4o_diagnosis')] if 'gpt4o_diagnosis' in row else []
+    if not candidates or not candidates[0]:
+        # Generate candidate if not provided
+        prompt = f"CASE: {case_text}\n\nTASK: Provide the single most likely diagnosis.\nDIAGNOSIS:"
+        async with sem:
+            res = await openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0)
+            candidates = [res.choices[0].message.content.strip()]
     
-    return {'gold': gold, 'pred': pred, 'audit_rationale': audit.get('rationale', '')}
+    audit = await perform_audit(case_text, candidates)
+    
+    return {
+        'case_id': case_id,
+        'gold': gold,
+        'candidates': json.dumps(candidates),
+        'final_diagnosis': audit.get('final_decision', 'Unknown'),
+        'audit_confidence': audit.get('confidence', 0),
+        'audit_rationale': audit.get('rationale', ''),
+        'audit_details': json.dumps(audit.get('audit', []))
+    }
 
 async def main(args):
-    # Load Data
     df = pd.read_csv(args.data_path)
     if args.samples:
-        df = df.sample(n=args.samples, random_state=args.seed)
-        
-    tasks = [process_case(row) for _, row in df.iterrows()]
-    results = []
-    for f in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
-        results.append(await f)
+        df = df.sample(n=min(args.samples, len(df)), random_state=args.seed)
     
-    # Save Results
-    final_df = pd.DataFrame(results)
+    print(f"Stage 2: Processing {len(df)} cases (Audit only)...")
+    tasks = [process_case(idx, row) for idx, row in df.iterrows()]
+    results = [await f for f in tqdm(asyncio.as_completed(tasks), total=len(tasks))]
+    
+    final_df = pd.DataFrame(results).sort_values('case_id').reset_index(drop=True)
     os.makedirs(args.output_dir, exist_ok=True)
-    output_file = f"{args.output_dir}/turbo_results_{args.samples}.csv"
+    output_file = f"{args.output_dir}/audit_results_{len(df)}.csv"
     final_df.to_csv(output_file, index=False)
-    print(f"Saved results to {output_file}")
+    
+    print(f"\nSTAGE 2 RESULTS: {len(final_df)} cases")
+    print(f"Saved: {output_file}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-path', required=True)
-    parser.add_argument('--output-dir', required=True)
+    parser.add_argument('--output-dir', default='results')
     parser.add_argument('--samples', type=int, default=350)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()

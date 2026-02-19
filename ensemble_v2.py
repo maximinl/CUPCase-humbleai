@@ -1,30 +1,35 @@
-import os, json, pandas as pd, re, asyncio, argparse
+import os
+import json
+import pandas as pd
+import re
+import asyncio
+import argparse
 from openai import AsyncOpenAI
-import requests
 from tqdm.asyncio import tqdm
 import nest_asyncio
 
-# Apply nest_asyncio to allow nested event loops in Colab
 nest_asyncio.apply()
 
-# Initialize Async Clients
 openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 deepseek_client = AsyncOpenAI(
     api_key=os.environ.get('DEEPSEEK_API_KEY'),
     base_url="https://api.deepseek.com"
 )
 
-# Limit concurrency
 sem = asyncio.Semaphore(5)
 
-def clean_json_string(s):
-    """Extracts the first JSON-like block from a string."""
-    s = re.sub(r"```json\s*|\s*```", "", s, flags=re.I)
-    start = s.find('{')
-    end = s.rfind('}')
-    if start != -1 and end != -1:
-        return s[start:end+1]
-    return s.strip()
+def check_semantic_agreement(diag1, diag2):
+    if not diag1 or not diag2:
+        return False
+    d1, d2 = diag1.lower().strip(), diag2.lower().strip()
+    if d1 == d2 or d1 in d2 or d2 in d1:
+        return True
+    stopwords = {'with', 'and', 'the', 'of', 'in', 'a', 'an', 'due', 'to', 'secondary', 'primary'}
+    words1 = set(d1.split()) - stopwords
+    words2 = set(d2.split()) - stopwords
+    if words1 and words2:
+        return len(words1 & words2) / min(len(words1), len(words2)) >= 0.5
+    return False
 
 async def get_candidates(case_text):
     prompt = f"CASE: {case_text}\n\nTASK: Provide the single most likely diagnosis. Be concise.\nDIAGNOSIS:"
@@ -35,64 +40,54 @@ async def get_candidates(case_text):
                 deepseek_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}], temperature=0)
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception:
-            return ["Error"]
+        except Exception as e:
+            return {"gpt4o": "Error", "deepseek": "Error", "agreement": False, "error": str(e)}
     
-    candidates = []
-    for r in results:
-        if not isinstance(r, Exception):
-            candidates.append(r.choices[0].message.content.strip())
-    return list(set(candidates))
-
-async def perform_audit(case_text, candidates):
-    candidate_str = "\n".join([f"- {c}" for c in candidates])
-    prompt = f"CASE: {case_text}\n\nDIFFERENTIAL:\n{candidate_str}\n\nTASK: Perform a 'For and Against' audit. Respond ONLY with valid JSON: {{\"final_decision\": \"...\", \"rationale\": \"...\"}}"
+    gpt4o = results[0].choices[0].message.content.strip() if not isinstance(results[0], Exception) else "Error"
+    deepseek = results[1].choices[0].message.content.strip() if not isinstance(results[1], Exception) else "Error"
+    agreement = check_semantic_agreement(gpt4o, deepseek)
     
-    async with sem:
-        try:
-            res = await openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0
-            )
-            raw_content = res.choices[0].message.content
-            return json.loads(clean_json_string(raw_content))
-        except Exception:
-            return {"final_decision": "Error", "rationale": "API Failure"}
+    return {"gpt4o": gpt4o, "deepseek": deepseek, "agreement": agreement, "error": None}
 
-async def process_case(row):
+async def process_case(case_id, row):
     case_text = row.get('clean text') or row.get('100%') or ""
     gold = row.get('final diagnosis', 'Unknown')
+    result = await get_candidates(case_text)
     
-    candidates = await get_candidates(case_text)
-    audit = await perform_audit(case_text, candidates)
-    pred = audit.get('final_decision', "Unknown")
+    # Stage 1: Use consensus if agreed, else GPT-4o
+    final = result["gpt4o"] if not result["agreement"] else result["gpt4o"]
     
-    return {'gold': gold, 'pred': pred, 'audit_rationale': audit.get('rationale', '')}
+    return {
+        'case_id': case_id,
+        'gold': gold,
+        'gpt4o_diagnosis': result["gpt4o"],
+        'deepseek_diagnosis': result["deepseek"],
+        'model_agreement': result["agreement"],
+        'final_diagnosis': final,
+        'error': result.get('error')
+    }
 
 async def main(args):
-    # Load Data
     df = pd.read_csv(args.data_path)
     if args.samples:
-        df = df.sample(n=args.samples, random_state=args.seed)
-        
-    tasks = [process_case(row) for _, row in df.iterrows()]
-    results = []
-    for f in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
-        results.append(await f)
+        df = df.sample(n=min(args.samples, len(df)), random_state=args.seed)
     
-    # Save Results
-    final_df = pd.DataFrame(results)
+    print(f"Stage 1: Processing {len(df)} cases (Ensemble only, NO audit)...")
+    tasks = [process_case(idx, row) for idx, row in df.iterrows()]
+    results = [await f for f in tqdm(asyncio.as_completed(tasks), total=len(tasks))]
+    
+    final_df = pd.DataFrame(results).sort_values('case_id').reset_index(drop=True)
     os.makedirs(args.output_dir, exist_ok=True)
-    output_file = f"{args.output_dir}/turbo_results_{args.samples}.csv"
+    output_file = f"{args.output_dir}/ensemble_v2_results_{len(df)}.csv"
     final_df.to_csv(output_file, index=False)
-    print(f"Saved results to {output_file}")
+    
+    print(f"\nSTAGE 1 RESULTS: {len(final_df)} cases, Agreement: {final_df['model_agreement'].mean()*100:.1f}%")
+    print(f"Saved: {output_file}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-path', required=True)
-    parser.add_argument('--output-dir', required=True)
+    parser.add_argument('--output-dir', default='results')
     parser.add_argument('--samples', type=int, default=350)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
