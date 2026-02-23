@@ -1,9 +1,11 @@
 import os, json, pandas as pd, re, asyncio, argparse
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
 import requests
 from tqdm.asyncio import tqdm
 import nest_asyncio
 
+load_dotenv()
 # Apply nest_asyncio to allow nested event loops in Colab
 nest_asyncio.apply()
 

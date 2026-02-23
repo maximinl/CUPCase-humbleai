@@ -1,38 +1,48 @@
-# CUPCase Diagnostic Pipeline (Internal Research)
+# CUPCase Diagnostic Pipeline
 
-This repository contains scripts and data for evaluating Large Language Models on the **CUPCase Hard Test** (Open-Ended Clinical Diagnosis). The project follows a three-stage evolutionary path to optimize diagnostic accuracy on real-world uncommon patient cases.
+This repository evaluates LLM-based diagnostic methods on two clinical datasets:
 
-## 🛠 Experimental Evolution
+- **Easy (MedQA):** Standard medical Q&A cases (`datasets/easy_medqa.csv`, 4,177 cases)
+- **Hard (CUPCase):** Real-world uncommon patient cases (`datasets/Case_report_w_images_dis_VF.csv`, 110K+ rows)
+
+## Methods
+
+### Baseline: GPT-4o Standalone
+Single-model zero-shot diagnosis using GPT-4o (extracted from Stage 1 output).
 
 ### Stage 1: Knowledge Ensemble (`ensemble_v2.py`)
-**Concept:** Utilize multi-model consensus to maximize the retrieval of rare diagnoses (Zebras).
-- **Mechanism:** Aggregates independent candidate lists from GPT-4o and DeepSeek-V3.
-- **Goal:** Increase recall for low-frequency medical conditions.
+Aggregates independent candidate diagnoses from **GPT-4o** and **DeepSeek-V3**, then checks semantic agreement.
 
 ### Stage 2: Systematic Reasoning Audit (`audit_pipeline.py`)
-**Concept:** Implement a 'System 2' reasoning layer to filter candidates based on clinical evidence.
-- **Mechanism:** Forces a structured "For vs. Against" evidence check for each candidate diagnosis before selection.
-- **Goal:** Mitigate 'Anchor Bias' and logical shortcuts in standard zero-shot generation.
+Forces a structured "For vs. Against" evidence check for each candidate using **GPT-4o**, producing a final diagnosis with confidence score.
 
 ### Stage 3: Hybrid Pipeline (`hybrid_boss_turbo.py`)
-**Concept:** Combine the high-recall retrieval of the Ensemble with the rigorous filtering of the Audit.
-- **Mechanism:** Candidates generated in Stage 1 are passed through the Audit logic of Stage 2.
-- **Performance:** Stabilized at **54.6% Accuracy** on $N=350$ samples, significantly outperforming the unassisted GPT-4o baseline (~42%).
+Combines Stage 1 (ensemble) and Stage 2 (audit) sequentially: candidates from the ensemble are passed through the audit filter.
 
-## 🚀 Execution Commands
+## Setup
 
-Reproduce any of the three experimental stages using the following commands:
+1. Copy `.env.example` to `.env` and add your API keys:
+   ```bash
+   cp .env.example .env
+   ```
+2. Install dependencies:
+   ```bash
+   pip install openai pandas tqdm nest_asyncio python-dotenv
+   ```
+
+## Reproduce Results (N=100)
 
 ```bash
-# Reproduce Stage 1: Ensemble Consensus
-python ensemble_v2.py --samples 350 --data-path datasets/Case_report_w_images_dis_VF.csv
+# --- Easy dataset ---
+python ensemble_v2.py --data-path datasets/easy_medqa.csv --output-dir output-100-test-easy --samples 100 --seed 42
+python audit_pipeline.py --ensemble-results output-100-test-easy/ensemble_v2_results_100.csv --data-path datasets/easy_medqa.csv --output-dir output-100-test-easy --samples 100 --seed 42
+python hybrid_boss_turbo.py --data-path datasets/easy_medqa.csv --output-dir output-100-test-easy --samples 100 --seed 42
 
-# Reproduce Stage 2: Systematic Audit Logic
-python audit_pipeline.py --samples 350 --data-path datasets/Case_report_w_images_dis_VF.csv
+# --- Hard dataset ---
+python ensemble_v2.py --data-path datasets/Case_report_w_images_dis_VF.csv --output-dir output-100-test-hard --samples 100 --seed 42
+python audit_pipeline.py --ensemble-results output-100-test-hard/ensemble_v2_results_100.csv --data-path datasets/Case_report_w_images_dis_VF.csv --output-dir output-100-test-hard --samples 100 --seed 42
+python hybrid_boss_turbo.py --data-path datasets/Case_report_w_images_dis_VF.csv --output-dir output-100-test-hard --samples 100 --seed 42
 
-# Reproduce Stage 3: Full Hybrid (Final Boss)
-python hybrid_boss_turbo.py --samples 350 --data-path datasets/Case_report_w_images_dis_VF.csv
+# --- Generate plot ---
+python plot_results.py
 ```
-
-## 📊 Results Summary
-Logs for the consolidated $N=350$ run, which captures the most diverse diagnostic scenarios, are located in `/results/turbo_results_350.csv`.

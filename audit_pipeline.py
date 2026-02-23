@@ -4,10 +4,12 @@ import pandas as pd
 import re
 import asyncio
 import argparse
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm as async_tqdm
 import nest_asyncio
 
+load_dotenv()
 nest_asyncio.apply()
 
 openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
@@ -57,7 +59,7 @@ Respond ONLY with valid JSON:
 
 async def process_case(case_id, row):
     case_text = row.get('clean text') or row.get('100%') or ""
-    gold = row.get('final diagnosis', 'Unknown')
+    gold = row.get('final diagnosis') or row.get('gold') or 'Unknown'
     
     # Get candidates from Stage 1 output or columns
     if 'candidates' in row and pd.notna(row['candidates']):
@@ -102,6 +104,17 @@ async def main(args):
     if args.ensemble_results:
         print(f"Loading Stage 1 results from: {args.ensemble_results}")
         df = pd.read_csv(args.ensemble_results)
+        # Merge case text and gold labels from original data if available
+        if args.data_path:
+            raw = pd.read_csv(args.data_path)
+            raw['case_id'] = raw.index
+            merge_cols = ['case_id']
+            if 'clean text' not in df.columns and 'clean text' in raw.columns:
+                merge_cols.append('clean text')
+            if 'final diagnosis' not in df.columns and 'final diagnosis' in raw.columns:
+                merge_cols.append('final diagnosis')
+            if len(merge_cols) > 1:
+                df = df.merge(raw[merge_cols], on='case_id', how='left')
     else:
         print(f"Warning: No --ensemble-results provided. Stage 2 needs Stage 1 output.")
         print(f"Loading raw data from: {args.data_path}")

@@ -31,8 +31,14 @@ htmlcov/
 
 # Output files
 output/
+output-100-test-easy/
+output-100-test-hard/
 *.csv
 !datasets/*.csv
+
+# Keep results plot (referenced in README)
+!output-100-test-results/
+!output-100-test-results/accuracy_comparison.png
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/

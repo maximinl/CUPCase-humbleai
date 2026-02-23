@@ -4,10 +4,12 @@ import pandas as pd
 import re
 import asyncio
 import argparse
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm as async_tqdm
 import nest_asyncio
 
+load_dotenv()
 nest_asyncio.apply()
 
 openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
