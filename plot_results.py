@@ -1,6 +1,6 @@
 """
 Grouped bar chart comparing Baseline + 3 diagnostic methods on Easy vs Hard datasets.
-Uses LLM judge for clinical equivalence (not string matching).
+Uses LLM judge for clinical equivalence.
 Usage: python plot_results.py
 """
 import os
@@ -12,13 +12,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import requests
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
+from dotenv import load_dotenvx
+
 
 load_dotenv()
 
 def llm_judge(pred, gold):
-    """Use DeepSeek to judge clinical equivalence."""
+    """Use DeepSeek to judge if prediction matches gold diagnosis."""
     if pd.isna(pred) or pd.isna(gold):
         return False
     
@@ -28,16 +28,24 @@ def llm_judge(pred, gold):
         return fuzzy_match(pred, gold)
     
     system = (
-        "You are a strict medical answer grader. "
-        'Output ONLY valid JSON: {"correct": true/false, "rationale": "..."}'
+        "You are a strict medical diagnosis grader. "
+        "Output ONLY valid JSON: {"correct": true/false, "rationale": "..."}"
     )
     
-    prompt = f"""GOLD ANSWER: {gold}
-MODEL ANSWER: {pred}
+    prompt = f"""GOLD DIAGNOSIS: {gold}
+PREDICTED DIAGNOSIS: {pred}
 
-Is the model answer clinically correct with respect to the gold answer?
-Consider: same condition with different names, abbreviations, or added detail = CORRECT.
-Return JSON only."""
+Is the predicted diagnosis the SAME CONDITION as the gold diagnosis?
+
+Rules:
+- CORRECT: Same disease/condition, even if wording differs (e.g., "heart attack" = "myocardial infarction")
+- CORRECT: Same core diagnosis with additional details (e.g., "pneumonia" vs "bacterial pneumonia")  
+- INCORRECT: Different conditions, even if related (e.g., "diabetes type 1" vs "diabetes type 2")
+- INCORRECT: Partial match or only mentions a symptom/complication instead of the diagnosis
+- INCORRECT: Overly broad or vague when gold is specific
+
+Be STRICT. When in doubt, mark as INCORRECT.
+Return JSON only: {{"correct": true/false, "rationale": "brief reason"}}"""
 
     try:
         r = requests.post(
@@ -54,13 +62,12 @@ Return JSON only."""
             timeout=60
         )
         content = r.json()["choices"][0]["message"]["content"]
-        # Parse JSON
         match = re.search(r'\{.*\}', content, re.DOTALL)
         if match:
             result = json.loads(match.group(0))
             return result.get("correct", False)
     except Exception as e:
-        print(f"Judge error: {e}, falling back to fuzzy match")
+        print(f"Judge error: {e}")
         return fuzzy_match(pred, gold)
     
     return False
@@ -75,61 +82,42 @@ def fuzzy_match(pred, gold):
         return False
     return p in g or g in p or p == g
 
-def compute_accuracy(df, pred_col, gold_col, use_llm=True, max_workers=20):
+def compute_accuracy(df, pred_col, gold_col, use_llm=True):
     """Compute accuracy using LLM judge or fuzzy match."""
     if use_llm:
-        pairs = [(row[pred_col], row[gold_col]) for _, row in df.iterrows()]
-        results = [False] * len(pairs)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(llm_judge, p, g): i for i, (p, g) in enumerate(pairs)}
-            for future in tqdm(as_completed(futures), total=len(pairs), desc=f"Judging {pred_col}"):
-                idx = futures[future]
-                try:
-                    results[idx] = future.result()
-                except Exception:
-                    results[idx] = False
-        return sum(results) / len(df) * 100
+        matches = 0
+        for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Judging {pred_col}"):
+            if llm_judge(row[pred_col], row[gold_col]):
+                matches += 1
+        return matches / len(df) * 100
     else:
         matches = sum(fuzzy_match(row[pred_col], row[gold_col]) for _, row in df.iterrows())
         return matches / len(df) * 100
 
-def find_csv(folder, prefix):
-    """Find CSV matching prefix regardless of sample count suffix."""
-    import glob
-    matches = glob.glob(os.path.join(folder, f'{prefix}*.csv'))
-    if not matches:
-        return None
-    return sorted(matches)[-1]  # Latest/largest if multiple
-
-
 def main(args):
-    # --- Load CSVs ---
     results = {}
-    sample_counts = {}
     methods = ['Baseline (GPT-4o)', 'Ensemble', 'Audit', 'Hybrid']
 
     for dataset_label, folder in [('Easy (MedQA)', args.easy_dir), ('Hard (CUPCase)', args.hard_dir)]:
         print(f"\n=== Processing {dataset_label} ===")
-
-        ensemble_path = find_csv(folder, 'ensemble_v2_results_')
-        audit_path = find_csv(folder, 'audit_results_')
-        hybrid_path = find_csv(folder, 'turbo_results_')
-
-        if not all(p and os.path.exists(p) for p in [ensemble_path, audit_path, hybrid_path]):
-            missing = [n for n, p in [('ensemble', ensemble_path), ('audit', audit_path), ('hybrid', hybrid_path)] if not p or not os.path.exists(p)]
-            print(f"Missing files in {folder}: {missing}, skipping...")
+        
+        ensemble_path = os.path.join(folder, 'ensemble_v2_results_100.csv')
+        audit_path = os.path.join(folder, 'audit_results_100.csv')
+        hybrid_path = os.path.join(folder, 'turbo_results_100.csv')
+        
+        if not all(os.path.exists(p) for p in [ensemble_path, audit_path, hybrid_path]):
+            print(f"Missing files in {folder}, skipping...")
             continue
-
+            
         ensemble_df = pd.read_csv(ensemble_path)
         audit_df = pd.read_csv(audit_path)
         hybrid_df = pd.read_csv(hybrid_path)
-        sample_counts[dataset_label] = len(ensemble_df)
 
         results[dataset_label] = {
-            'Baseline (GPT-4o)': compute_accuracy(ensemble_df, 'gpt4o_diagnosis', 'gold', use_llm=args.use_llm, max_workers=args.workers),
-            'Ensemble': compute_accuracy(ensemble_df, 'final_diagnosis', 'gold', use_llm=args.use_llm, max_workers=args.workers),
-            'Audit': compute_accuracy(audit_df, 'final_diagnosis', 'gold', use_llm=args.use_llm, max_workers=args.workers),
-            'Hybrid': compute_accuracy(hybrid_df, 'pred', 'gold', use_llm=args.use_llm, max_workers=args.workers),
+            'Baseline (GPT-4o)': compute_accuracy(ensemble_df, 'gpt4o_diagnosis', 'gold', use_llm=args.use_llm),
+            'Ensemble': compute_accuracy(ensemble_df, 'final_diagnosis', 'gold', use_llm=args.use_llm),
+            'Audit': compute_accuracy(audit_df, 'final_diagnosis', 'gold', use_llm=args.use_llm),
+            'Hybrid': compute_accuracy(hybrid_df, 'pred', 'gold', use_llm=args.use_llm),
         }
 
     if not results:
@@ -140,7 +128,7 @@ def main(args):
     print("\n" + "="*50)
     print("ACCURACY RESULTS")
     print("="*50)
-    judge_type = "LLM Judge" if args.use_llm else "Fuzzy Match"
+    judge_type = "LLM Judge (strict)" if args.use_llm else "Fuzzy Match"
     print(f"Judge: {judge_type}")
     print(f"{'Method':<20} {'Easy (MedQA)':>14} {'Hard (CUPCase)':>16}")
     print("-" * 52)
@@ -168,11 +156,9 @@ def main(args):
                     f'{height:.1f}%', ha='center', va='bottom', fontsize=8, fontweight='bold')
 
     ax.set_ylabel('Accuracy (%)', fontsize=12)
-    total_n = sum(sample_counts.values())
-    ax.set_title(f'Diagnostic Accuracy: Baseline + 3 Methods ({judge_type})', fontsize=13, fontweight='bold')
+    ax.set_title(f'Diagnostic Accuracy: Baseline + 3 Methods ({judge_type}, N=100)', fontsize=13, fontweight='bold')
     ax.set_xticks(x)
-    ds_labels = [f'{ds}\nN={sample_counts.get(ds, "?")}' for ds in datasets]
-    ax.set_xticklabels(ds_labels, fontsize=11)
+    ax.set_xticklabels(datasets, fontsize=11)
     ax.set_ylim(0, min(max(max(v.values()) for v in results.values()) + 15, 105))
     ax.legend(fontsize=9, loc='upper right')
     ax.spines['top'].set_visible(False)
@@ -188,11 +174,10 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--easy-dir', default='output-full-easy')
-    parser.add_argument('--hard-dir', default='output-full-hard')
-    parser.add_argument('--output-dir', default='output-results')
-    parser.add_argument('--use-llm', action='store_true', default=True, help='Use LLM judge (default)')
-    parser.add_argument('--no-llm', dest='use_llm', action='store_false', help='Use fuzzy match instead')
-    parser.add_argument('--workers', type=int, default=20, help='Parallel workers for LLM judge (default: 20)')
+    parser.add_argument('--easy-dir', default='output-100-test-easy')
+    parser.add_argument('--hard-dir', default='output-100-test-hard')
+    parser.add_argument('--output-dir', default='output-100-test-results')
+    parser.add_argument('--use-llm', action='store_true', default=True)
+    parser.add_argument('--no-llm', dest='use_llm', action='store_false')
     args = parser.parse_args()
     main(args)
