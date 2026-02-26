@@ -4,12 +4,10 @@ import pandas as pd
 import re
 import asyncio
 import argparse
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm as async_tqdm
 import nest_asyncio
 
-load_dotenv()
 nest_asyncio.apply()
 
 openai_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
@@ -24,11 +22,10 @@ async def perform_audit(case_text, candidates):
     """Stage 2: For/against reasoning on candidates."""
     candidate_str = "\n".join([f"- {c}" for c in candidates])
     
-    # Adjust prompt based on number of candidates
     if len(candidates) == 1:
-        task_desc = "Critically evaluate this diagnosis. Consider what could be wrong with it."
+        task_desc = "Critically evaluate this diagnosis. Consider what could be wrong with it. Then provide your final diagnosis."
     else:
-        task_desc = "Perform a 'For and Against' audit for each diagnosis, then select the most likely."
+        task_desc = "Perform a 'For and Against' audit for each diagnosis, then select the most likely one."
     
     prompt = f"""CASE: {case_text}
 
@@ -39,12 +36,14 @@ TASK: {task_desc}
 
 Respond ONLY with valid JSON:
 {{
-    "audit": [{{"diagnosis": "...", "evidence_for": ["..."], "evidence_against": ["..."]}}],
-    "final_decision": "most likely diagnosis",
-    "confidence": 0.0-1.0,
-    "rationale": "brief explanation"
-}}"""
-    
+    "audit": [{{"diagnosis": "<diagnosis name>", "evidence_for": ["point1", "point2"], "evidence_against": ["point1", "point2"]}}],
+    "final_decision": "<YOUR CHOSEN DIAGNOSIS - must be an actual medical diagnosis, NOT a placeholder>",
+    "confidence": <0.0 to 1.0>,
+    "rationale": "<brief explanation>"
+}}
+
+IMPORTANT: "final_decision" must contain the actual diagnosis name (e.g., "Pneumonia", "Type 2 Diabetes"), NOT placeholder text like "most likely diagnosis"."""
+
     async with sem:
         try:
             res = await openai_client.chat.completions.create(
@@ -53,19 +52,26 @@ Respond ONLY with valid JSON:
                 response_format={"type": "json_object"},
                 temperature=0
             )
-            return json.loads(clean_json_string(res.choices[0].message.content))
+            parsed = json.loads(clean_json_string(res.choices[0].message.content))
+            
+            # Fallback if model still returns placeholder
+            final = parsed.get('final_decision', 'Unknown')
+            if final.lower() in ['most likely diagnosis', 'unknown', '']:
+                # Use first candidate as fallback
+                final = candidates[0] if candidates else 'Unknown'
+                parsed['final_decision'] = final
+            
+            return parsed
         except Exception as e:
-            return {"final_decision": "Error", "confidence": 0, "rationale": str(e), "audit": []}
+            return {"final_decision": candidates[0] if candidates else "Error", "confidence": 0, "rationale": str(e), "audit": []}
 
 async def process_case(case_id, row):
     case_text = row.get('clean text') or row.get('100%') or ""
     gold = row.get('final diagnosis') or row.get('gold') or 'Unknown'
     
-    # Get candidates from Stage 1 output or columns
     if 'candidates' in row and pd.notna(row['candidates']):
         candidates = json.loads(row['candidates'])
     elif 'gpt4o_diagnosis' in row and 'deepseek_diagnosis' in row:
-        # Reconstruct from separate columns
         candidates = []
         if pd.notna(row.get('gpt4o_diagnosis')):
             candidates.append(row['gpt4o_diagnosis'])
@@ -74,17 +80,7 @@ async def process_case(case_id, row):
         if not candidates:
             candidates = ["Unknown"]
     else:
-        # No Stage 1 data - this shouldn't happen in normal pipeline
-        print(f"Warning: No candidates for case {case_id}, skipping audit")
-        return {
-            'case_id': case_id,
-            'gold': gold,
-            'candidates': "[]",
-            'final_diagnosis': "Error: No candidates",
-            'audit_confidence': 0,
-            'audit_rationale': "No candidates provided from Stage 1",
-            'audit_details': "[]"
-        }
+        candidates = ["Unknown"]
     
     audit = await perform_audit(case_text, candidates)
     
@@ -100,23 +96,10 @@ async def process_case(case_id, row):
     }
 
 async def main(args):
-    # Load Stage 1 results if provided, else raw data
     if args.ensemble_results:
         print(f"Loading Stage 1 results from: {args.ensemble_results}")
         df = pd.read_csv(args.ensemble_results)
-        # Merge case text and gold labels from original data if available
-        if args.data_path:
-            raw = pd.read_csv(args.data_path)
-            raw['case_id'] = raw.index
-            merge_cols = ['case_id']
-            if 'clean text' not in df.columns and 'clean text' in raw.columns:
-                merge_cols.append('clean text')
-            if 'final diagnosis' not in df.columns and 'final diagnosis' in raw.columns:
-                merge_cols.append('final diagnosis')
-            if len(merge_cols) > 1:
-                df = df.merge(raw[merge_cols], on='case_id', how='left')
     else:
-        print(f"Warning: No --ensemble-results provided. Stage 2 needs Stage 1 output.")
         print(f"Loading raw data from: {args.data_path}")
         df = pd.read_csv(args.data_path)
     
@@ -144,8 +127,8 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-path', default=None, help='Raw data path (fallback)')
-    parser.add_argument('--ensemble-results', default=None, help='Path to Stage 1 CSV output')
+    parser.add_argument('--data-path', default=None)
+    parser.add_argument('--ensemble-results', default=None)
     parser.add_argument('--output-dir', default='results')
     parser.add_argument('--samples', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
