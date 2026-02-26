@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import requests
 from tqdm import tqdm
-from dotenv import load_dotenvx
+from dotenv import load_dotenv
 
 
 load_dotenv()
