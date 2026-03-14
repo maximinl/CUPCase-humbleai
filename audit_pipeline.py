@@ -20,29 +20,27 @@ def clean_json_string(s):
 
 async def perform_audit(case_text, candidates):
     """Stage 2: For/against reasoning on candidates."""
-    candidate_str = "\n".join([f"- {c}" for c in candidates])
-    
-    if len(candidates) == 1:
-        task_desc = "Critically evaluate this diagnosis. Consider what could be wrong with it. Then provide your final diagnosis."
-    else:
-        task_desc = "Perform a 'For and Against' audit for each diagnosis, then select the most likely one."
-    
+    candidate_str = "\n".join([f"{i+1}. {c}" for i, c in enumerate(candidates)])
+
     prompt = f"""CASE: {case_text}
 
 CANDIDATE DIAGNOSES:
 {candidate_str}
 
-TASK: {task_desc}
+TASK: For each candidate diagnosis, list the clinical evidence FOR and AGAINST it based on the case details. Then select the best-supported candidate as your final decision.
+
+CRITICAL RULES:
+- You MUST select your final_decision from the CANDIDATE DIAGNOSES listed above.
+- Do NOT invent a new diagnosis. Only choose from the numbered candidates.
+- If there is only one candidate, confirm or reject it — but if rejecting, still return that candidate as final_decision.
 
 Respond ONLY with valid JSON:
 {{
-    "audit": [{{"diagnosis": "<diagnosis name>", "evidence_for": ["point1", "point2"], "evidence_against": ["point1", "point2"]}}],
-    "final_decision": "<YOUR CHOSEN DIAGNOSIS - must be an actual medical diagnosis, NOT a placeholder>",
+    "audit": [{{"diagnosis": "<candidate diagnosis>", "evidence_for": ["point1", "point2"], "evidence_against": ["point1", "point2"]}}],
+    "final_decision": "<one of the candidate diagnoses above, copied exactly>",
     "confidence": <0.0 to 1.0>,
     "rationale": "<brief explanation>"
-}}
-
-IMPORTANT: "final_decision" must contain the actual diagnosis name (e.g., "Pneumonia", "Type 2 Diabetes"), NOT placeholder text like "most likely diagnosis"."""
+}}"""
 
     async with sem:
         try:
