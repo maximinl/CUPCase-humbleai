@@ -1,11 +1,13 @@
 #!/bin/bash
-# v08: 27B bf16 main + 9B bf16 judge — 2 GPU — full precision 27B
+# v08: 27B bf16 generation WITH thinking + 27B bf16 judge (thinking OFF)
+# Purpose: Does chain-of-thought help generation when judge is reliable?
+# Key test: v02 showed 100% but judge was inflated — now judge is independent
 #SBATCH --job-name=hf-v08
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=196G
-#SBATCH --time=08:00:00
+#SBATCH --mem=256G
+#SBATCH --time=06:00:00
 #SBATCH --output=slurm-hf/logs/v08-%j.out
 #SBATCH --error=slurm-hf/logs/v08-%j.err
 
@@ -28,7 +30,9 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
 python3.11 hf_experiment.py \
     --model-main Qwen/Qwen3.5-27B \
-    --model-small Qwen/Qwen3.5-9B \
+    --model-small Qwen/Qwen3.5-27B \
+    --model-judge Qwen/Qwen3.5-27B \
+    --enable-thinking \
     --samples 10 --seed 42 \
-    --max-tokens 1024 \
-    --output-dir output-hf/v08-27bbf16-9b
+    --max-tokens 2048 \
+    --output-dir output-hf/v08-27bbf16-think-27bjudge

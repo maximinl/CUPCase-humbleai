@@ -43,6 +43,9 @@ output-100-test-hard/
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/
 
+# Local TODO
+TODO_HYPOTHESES.md
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -1,11 +1,14 @@
 #!/bin/bash
-# v09: 27B 4bit main + 27B 4bit judge — 2 GPU — both 27B quantized
+# v09: TRUE ENSEMBLE — 27B main + 9B small (different models!) + 27B judge
+# Purpose: Test if ensemble actually helps when main != small
+# This is the experiment that v01-v05 couldn't test (main==small everywhere)
+# Memory: 27B bf16 (~54GB) + 9B bf16 (~18GB) = ~72GB on H200 (140GB)
 #SBATCH --job-name=hf-v09
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=196G
-#SBATCH --time=08:00:00
+#SBATCH --mem=256G
+#SBATCH --time=06:00:00
 #SBATCH --output=slurm-hf/logs/v09-%j.out
 #SBATCH --error=slurm-hf/logs/v09-%j.err
 
@@ -28,9 +31,8 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
 python3.11 hf_experiment.py \
     --model-main Qwen/Qwen3.5-27B \
-    --model-small Qwen/Qwen3.5-27B \
-    --quantize-main 4bit \
-    --quantize-small 4bit \
+    --model-small Qwen/Qwen3.5-9B \
+    --model-judge Qwen/Qwen3.5-27B \
     --samples 10 --seed 42 \
     --max-tokens 1024 \
-    --output-dir output-hf/v09-27b4bit-27b4bit
+    --output-dir output-hf/v09-27bmain-9bsmall-27bjudge

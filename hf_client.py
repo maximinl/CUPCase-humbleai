@@ -313,8 +313,13 @@ class HFClient:
         temp = float(self.temperature)
         do_sample = temp > 0.0
 
+        # Thinking mode needs more tokens: thinking block + answer
+        effective_max_tokens = self.max_tokens
+        if self.enable_thinking:
+            effective_max_tokens = max(self.max_tokens, 4096)
+
         gen_kwargs = {
-            "max_new_tokens": self.max_tokens,
+            "max_new_tokens": effective_max_tokens,
             "do_sample": do_sample,
             "repetition_penalty": self.repetition_penalty,
             "pad_token_id": self._tokenizer.eos_token_id,
@@ -335,23 +340,59 @@ class HFClient:
         raw_text = self._tokenizer.decode(response_tokens, skip_special_tokens=False)
 
         # Strip <think>...</think> blocks (Qwen3.5 thinking mode)
+        thinking_content = ""
         if '<think>' in raw_text:
             think_end = raw_text.rfind('</think>')
             if think_end != -1:
-                # Take only the text AFTER the last </think>
+                think_start = raw_text.find('<think>')
+                thinking_content = raw_text[think_start + len('<think>'):think_end].strip()
                 content = raw_text[think_end + len('</think>'):]
             else:
-                # Thinking was cut off by max_tokens — take text before <think>
-                content = raw_text.split('<think>')[0]
+                # Thinking was cut off by max_tokens
+                think_start = raw_text.find('<think>')
+                thinking_content = raw_text[think_start + len('<think>'):].strip()
+                content = ""
         else:
             content = raw_text
 
         # Remove remaining special tokens (e.g., <|im_end|>, <|endoftext|>)
         content = re.sub(r'<\|[^|]*\|>', '', content).strip()
 
-        # Fallback: if stripping left nothing, decode normally
+        # Filter garbage patterns (residual thinking headers)
+        _GARBAGE_RE = re.compile(
+            r'^(?:Output Generation|Thinking Process|Evaluate Clinical Features|'
+            r'Construct Final String|Final Check|Step \d|Analysis|Summary):?\s*$',
+            re.IGNORECASE,
+        )
+        if content and _GARBAGE_RE.match(content):
+            content = ""
+
+        # Fallback: extract diagnosis from thinking block if answer is empty
+        if not content and thinking_content:
+            _THINK_DIAG_PATTERNS = [
+                r'(?:final|most likely|primary)\s*(?:diagnosis|dx)\s*(?:is|:)\s*\**\s*([^\n\*\.]+)',
+                r'\*\*(?:Final |Most Likely )?Diagnosis\s*(?::|is)\s*\**\s*([^\n\*]+)',
+                r'(?:the (?:most likely|final|primary) diagnosis is)\s*\**\s*([^\n\*\.]+)',
+                r'(?:(?:conclude|determine|identify)\s.*?(?:as|is|:))\s*\**\s*([^\n\*\.]+)',
+            ]
+            for pat in _THINK_DIAG_PATTERNS:
+                m = re.search(pat, thinking_content, re.IGNORECASE)
+                if m:
+                    candidate = m.group(1).strip().strip('"\'*').strip()
+                    if 3 < len(candidate) < 120:
+                        content = candidate
+                        break
+            # Second fallback: last bold text in thinking
+            if not content:
+                bold_matches = re.findall(r'\*\*([^*]{5,80})\*\*', thinking_content)
+                if bold_matches:
+                    content = bold_matches[-1].strip()
+
+        # Ultimate fallback: decode without special tokens, but only if short
         if not content:
-            content = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+            decoded = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+            if decoded and len(decoded) < 120 and '\n' not in decoded:
+                content = decoded
 
         prompt_tokens = int(input_len)
         completion_tokens = int(response_tokens.shape[0])

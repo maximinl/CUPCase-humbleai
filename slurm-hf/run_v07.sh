@@ -1,11 +1,13 @@
 #!/bin/bash
-# v07: 27B 8bit main + 9B bf16 judge — 2 GPU — 8bit main model
+# v07: 27B bf16 generation (no thinking) + 27B bf16 judge (no thinking)
+# Purpose: Best possible quality — full precision everything on H200
+# Tests: Is 27B bf16 significantly better than 27B 4bit (v05)?
 #SBATCH --job-name=hf-v07
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=196G
-#SBATCH --time=08:00:00
+#SBATCH --mem=256G
+#SBATCH --time=06:00:00
 #SBATCH --output=slurm-hf/logs/v07-%j.out
 #SBATCH --error=slurm-hf/logs/v07-%j.err
 
@@ -28,8 +30,8 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
 python3.11 hf_experiment.py \
     --model-main Qwen/Qwen3.5-27B \
-    --model-small Qwen/Qwen3.5-9B \
-    --quantize-main 8bit \
+    --model-small Qwen/Qwen3.5-27B \
+    --model-judge Qwen/Qwen3.5-27B \
     --samples 10 --seed 42 \
     --max-tokens 1024 \
-    --output-dir output-hf/v07-27b8bit-9b
+    --output-dir output-hf/v07-27bbf16-27bjudge

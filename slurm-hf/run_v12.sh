@@ -1,13 +1,15 @@
 #!/bin/bash
-# v04: 9B 8bit main + 9B 8bit judge — H100 1 GPU — mid quantization
-#SBATCH --job-name=hf-v04
+# v12: 27B main + 9B small + 27B judge — DIVERSE CANDIDATES (differential mode)
+# Purpose: Validate Issue #2 — audit always receives 2+ candidates
+# Ref: https://github.com/maximinl/CUPCase-humbleai/issues/2
+#SBATCH --job-name=hf-v12
 #SBATCH --partition=mit_normal_gpu
-#SBATCH --gres=gpu:h100:1
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=96G
+#SBATCH --mem=256G
 #SBATCH --time=06:00:00
-#SBATCH --output=slurm-hf/logs/v04-%j.out
-#SBATCH --error=slurm-hf/logs/v04-%j.err
+#SBATCH --output=slurm-hf/logs/v12-%j.out
+#SBATCH --error=slurm-hf/logs/v12-%j.err
 
 set -e
 cd /orcd/pool/005/sebasmos/code/CUPCase-humbleai
@@ -27,10 +29,10 @@ set -a; [ -f .env ] && source .env; set +a
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
 python3.11 hf_experiment.py \
-    --model-main Qwen/Qwen3.5-9B \
+    --model-main Qwen/Qwen3.5-27B \
     --model-small Qwen/Qwen3.5-9B \
-    --quantize-main 8bit \
-    --quantize-small 8bit \
+    --model-judge Qwen/Qwen3.5-27B \
+    --diverse-mode differential \
     --samples 10 --seed 42 \
     --max-tokens 1024 \
-    --output-dir output-hf/v04-9b-8bit
+    --output-dir output-hf/v12-27b9b-differential-27bjudge

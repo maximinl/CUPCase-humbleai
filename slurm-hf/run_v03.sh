@@ -1,8 +1,8 @@
 #!/bin/bash
-# v03: 9B 4bit main + 9B 4bit judge — 1 GPU — lightweight quantized
+# v03: 9B 4bit main + 9B 4bit judge — H100 1 GPU — lightweight quantized
 #SBATCH --job-name=hf-v03
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:1
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=06:00:00

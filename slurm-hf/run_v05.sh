@@ -1,10 +1,10 @@
 #!/bin/bash
-# v05: 27B 4bit main + 9B bf16 judge — 2 GPU — quantized 27B main
+# v05: 27B 4bit main + 9B bf16 judge — H200 1 GPU — quantized 27B main
 #SBATCH --job-name=hf-v05
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=196G
+#SBATCH --mem=256G
 #SBATCH --time=06:00:00
 #SBATCH --output=slurm-hf/logs/v05-%j.out
 #SBATCH --error=slurm-hf/logs/v05-%j.err

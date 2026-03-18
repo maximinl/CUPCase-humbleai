@@ -1,11 +1,13 @@
 #!/bin/bash
-# v06: 27B 4bit main + 9B bf16 judge — 2 GPU — thinking mode ON
+# v06: REJUDGE v01-v05 with 27B bf16 judge (thinking OFF)
+# Purpose: Calibrate judge — find which generation config is actually best
+# All generation already done; this only runs the judge on existing CSVs
 #SBATCH --job-name=hf-v06
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=196G
-#SBATCH --time=08:00:00
+#SBATCH --mem=128G
+#SBATCH --time=02:00:00
 #SBATCH --output=slurm-hf/logs/v06-%j.out
 #SBATCH --error=slurm-hf/logs/v06-%j.err
 
@@ -26,11 +28,11 @@ python3.11 -c "import torch; print('torch OK:', torch.__version__)" || { echo "F
 set -a; [ -f .env ] && source .env; set +a
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
-python3.11 hf_experiment.py \
-    --model-main Qwen/Qwen3.5-27B \
-    --model-small Qwen/Qwen3.5-9B \
-    --quantize-main 4bit \
-    --samples 10 --seed 42 \
-    --max-tokens 2048 \
-    --enable-thinking \
-    --output-dir output-hf/v06-27b4bit-9b-think
+python3.11 rejudge.py \
+    --judge-model Qwen/Qwen3.5-27B \
+    --csv-dir \
+        output-hf/v01-9b-bf16 \
+        output-hf/v02-9b-bf16-think \
+        output-hf/v03-9b-4bit \
+        output-hf/v04-9b-8bit \
+        output-hf/v05-27b4bit-9b

@@ -1,8 +1,8 @@
 #!/bin/bash
-# v02: 9B bf16 main + 9B bf16 judge — 2 GPU — thinking mode ON, max_tokens=2048
+# v02: 9B bf16 main + 9B bf16 judge — H100 1 GPU — thinking mode ON, max_tokens=2048
 #SBATCH --job-name=hf-v02
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=06:00:00

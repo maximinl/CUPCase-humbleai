@@ -1,11 +1,13 @@
 #!/bin/bash
-# v10: 27B 8bit main + 27B 8bit judge — 2 GPU — both 27B 8-bit
+# v10: 9B bf16 + thinking ON (generation) + 27B bf16 judge (thinking OFF)
+# Purpose: Cheapest good config? 9B is fast — if thinking makes it competitive
+#          with 27B, this is the best cost/accuracy tradeoff
 #SBATCH --job-name=hf-v10
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=196G
-#SBATCH --time=08:00:00
+#SBATCH --mem=128G
+#SBATCH --time=06:00:00
 #SBATCH --output=slurm-hf/logs/v10-%j.out
 #SBATCH --error=slurm-hf/logs/v10-%j.err
 
@@ -27,10 +29,10 @@ set -a; [ -f .env ] && source .env; set +a
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
 python3.11 hf_experiment.py \
-    --model-main Qwen/Qwen3.5-27B \
-    --model-small Qwen/Qwen3.5-27B \
-    --quantize-main 8bit \
-    --quantize-small 8bit \
+    --model-main Qwen/Qwen3.5-9B \
+    --model-small Qwen/Qwen3.5-9B \
+    --model-judge Qwen/Qwen3.5-27B \
+    --enable-thinking \
     --samples 10 --seed 42 \
-    --max-tokens 1024 \
-    --output-dir output-hf/v10-27b8bit-27b8bit
+    --max-tokens 2048 \
+    --output-dir output-hf/v10-9bthink-27bjudge

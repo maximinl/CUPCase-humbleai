@@ -1,8 +1,8 @@
 #!/bin/bash
-# v01: 9B bf16 main + 9B bf16 judge — 2 GPU — clean baseline
+# v01: 9B bf16 main + 9B bf16 judge — H100 1 GPU — clean baseline
 #SBATCH --job-name=hf-v01
-#SBATCH --partition=mit_preemptable
-#SBATCH --gres=gpu:2
+#SBATCH --partition=mit_normal_gpu
+#SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=06:00:00

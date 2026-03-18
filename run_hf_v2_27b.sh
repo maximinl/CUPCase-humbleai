@@ -1,24 +1,27 @@
 #!/bin/bash
 #SBATCH --job-name=hf-27b
-#SBATCH --partition=mit_normal_gpu
+#SBATCH --partition=mit_preemptable
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=02:00:00
+#SBATCH --time=06:00:00
 #SBATCH --output=slurm-hf-27b-%j.out
 #SBATCH --error=slurm-hf-27b-%j.err
-
-# MEDIUM: Qwen3.5-27B for everything (~56GB VRAM)
-# Single model, stronger reasoning
 
 set -e
 cd /orcd/pool/005/sebasmos/code/CUPCase-humbleai
 module load cuda/12.4.0
 
-python3.11 -m pip install --user --upgrade \
-    transformers torch accelerate huggingface_hub \
-    bitsandbytes pandas tqdm nest_asyncio python-dotenv requests \
-    2>&1 | tail -5
+for i in 1 2 3; do
+    python3.11 -m pip install --user \
+        torch transformers accelerate huggingface_hub \
+        bitsandbytes pandas tqdm nest_asyncio python-dotenv requests \
+        2>&1 | tail -3 && break
+    echo "Install attempt $i failed, retrying..."
+    sleep 5
+done
+
+python3.11 -c "import torch; print('torch OK:', torch.__version__)" || { echo "FATAL: torch not installed"; exit 1; }
 
 set -a; source .env; set +a
 

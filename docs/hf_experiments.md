@@ -1,7 +1,11 @@
 # HuggingFace Local Model Experiments
 
 Systematic evaluation of Qwen3.5 models for the CUPCase diagnostic pipeline.
-All experiments run on MIT HPC (L40S GPUs, 46GB VRAM each), `mit_preemptable` partition.
+Experiments run on MIT HPC `mit_normal_gpu` partition:
+- **v01-v04 (9B):** H100 GPUs (80GB VRAM) — 1 GPU per job
+- **v05-v10 (27B):** H200 GPUs (141GB VRAM) — 1 GPU per job
+
+Previous runs on L40S (46GB) OOM'd for 27B models. Switched to larger GPUs on 2026-03-18.
 
 ## Bug Fixes Applied (2026-03-18)
 
@@ -15,54 +19,103 @@ All experiments run on MIT HPC (L40S GPUs, 46GB VRAM each), `mit_preemptable` pa
    its chain-of-thought reasoning mode. When enabled, `max_tokens` should be increased to 2048+
    to leave room for the answer after thinking.
 
-## Experiment Matrix (10 variants)
+## Experiment Matrix (13 variants)
 
-All use N=10 samples, seed=42, `mit_preemptable` partition.
+All on `mit_normal_gpu` partition, H200 GPUs (141GB VRAM). N=10, seed=42.
 
-| ID | Main Model | Main Quant | Judge Model | Judge Quant | GPUs | RAM | Thinking | max_tokens | What it tests |
-|----|-----------|-----------|-------------|------------|:----:|:---:|:--------:|:----------:|---------------|
-| v01 | Qwen3.5-9B | bf16 | Qwen3.5-9B | bf16 | 2 | 128G | off | 1024 | Clean baseline after thinking fix |
-| v02 | Qwen3.5-9B | bf16 | Qwen3.5-9B | bf16 | 2 | 128G | **on** | 2048 | Does thinking improve 9B accuracy? |
-| v03 | Qwen3.5-9B | 4bit | Qwen3.5-9B | 4bit | 1 | 96G | off | 1024 | 4-bit quantization impact on 9B |
-| v04 | Qwen3.5-9B | 8bit | Qwen3.5-9B | 8bit | 1 | 96G | off | 1024 | 8-bit quantization impact on 9B |
-| v05 | Qwen3.5-27B | 4bit | Qwen3.5-9B | bf16 | 2 | 196G | off | 1024 | Larger model, quantized, 9B judge |
-| v06 | Qwen3.5-27B | 4bit | Qwen3.5-9B | bf16 | 2 | 196G | **on** | 2048 | Does thinking improve 27B accuracy? |
-| v07 | Qwen3.5-27B | 8bit | Qwen3.5-9B | bf16 | 2 | 196G | off | 1024 | 8-bit 27B vs 4-bit 27B |
-| v08 | Qwen3.5-27B | bf16 | Qwen3.5-9B | bf16 | 2 | 196G | off | 1024 | Full-precision 27B (best quality?) |
-| v09 | Qwen3.5-27B | 4bit | Qwen3.5-27B | 4bit | 2 | 196G | off | 1024 | Does 27B judge outperform 9B judge? |
-| v10 | Qwen3.5-27B | 8bit | Qwen3.5-27B | 8bit | 2 | 196G | off | 1024 | 8-bit 27B for both roles |
+### Phase 1: Initial generation (v01-v05, completed)
 
-### Key comparisons
+Ran with same model as judge — results showed judge unreliability (v02 = 100% with thinking).
 
-- **Quantization effect (9B):** v01 (bf16) vs v03 (4bit) vs v04 (8bit)
-- **Quantization effect (27B):** v05 (4bit) vs v07 (8bit) vs v08 (bf16)
-- **Thinking mode:** v01 vs v02 (9B), v05 vs v06 (27B)
-- **Model size:** v01 (9B) vs v05 (27B-4bit) vs v08 (27B-bf16)
-- **Judge quality:** v05 (9B judge) vs v09 (27B judge)
+| ID | Main | Quant | Judge | Gen Thinking | Judge Thinking | GPU | What it tests |
+|----|------|-------|-------|:---:|:---:|:---:|---------------|
+| v01 | 9B | bf16 | 9B bf16 | off | off | H100 | 9B baseline |
+| v02 | 9B | bf16 | 9B bf16 | **on** | **on** | H100 | Thinking (both gen+judge — **flawed: judge too lenient**) |
+| v03 | 9B | 4bit | 9B 4bit | off | off | H100 | 4-bit quantization |
+| v04 | 9B | 8bit | 9B 8bit | off | off | H100 | 8-bit quantization |
+| v05 | 27B | 4bit | 9B bf16 | off | off | H200 | Larger model |
 
-### Memory budget rationale
+### Phase 2: Redesigned experiments (v06-v10)
 
-Previous runs OOM'd on L40S (46GB). Memory allocations use ~50% headroom:
-- 9B bf16 ≈ 18GB × 2 models = 36GB → 2 GPUs (92GB available)
-- 9B 4bit ≈ 5GB × 2 = 10GB → 1 GPU (46GB available)
-- 27B 4bit + 9B bf16 ≈ 32GB → 2 GPUs (92GB available)
-- 27B bf16 + 9B bf16 ≈ 72GB → 2 GPUs (92GB available)
-- 27B 8bit × 2 ≈ 54GB → 2 GPUs (92GB available)
+**Key fixes:**
+- Separated judge model from generation model (`--model-judge`, `--judge-thinking` flags)
+- Judge always uses 27B bf16 with thinking OFF for reliable evaluation
+- v06 re-judges v01-v05 CSVs with the better judge (no re-generation needed)
+- v09 tests true ensemble (different main vs small models)
+
+| ID | Main | Quant | Small | Judge | Gen Thinking | Judge Thinking | GPU | What it tests |
+|----|------|-------|-------|-------|:---:|:---:|:---:|---------------|
+| v06 | — | — | — | 27B bf16 | — | off | H200 | **REJUDGE** v01-v05 with reliable judge |
+| v07 | 27B | bf16 | 27B bf16 | 27B bf16 | off | off | H200 | Best quality baseline (full precision) |
+| v08 | 27B | bf16 | 27B bf16 | 27B bf16 | **on** | off | H200 | Does CoT help generation? (reliable judge) |
+| v09 | 27B | bf16 | **9B bf16** | 27B bf16 | off | off | H200 | **True ensemble** (different models!) |
+| v10 | 9B | bf16 | 9B bf16 | 27B bf16 | **on** | off | H200 | Cheapest good config? (9B+thinking, 27B judge) |
+
+### Key comparisons (Phase 2)
+
+- **Judge calibration:** v06 re-judges v01-v05 → reveals true generation quality
+- **Thinking effect (reliable judge):** v07 vs v08 (27B), v01-rejudged vs v10 (9B)
+- **Model size:** v10 (9B+think) vs v07 (27B no think) — is 9B+CoT competitive?
+- **True ensemble:** v09 (27B+9B) vs v07 (27B alone) — does diversity help?
+- **Full precision vs quantized:** v07 (27B bf16) vs v05-rejudged (27B 4bit)
+
+### Phase 3: Pipeline fix experiments (v11-v13)
+
+Each tests a specific fix from the GitHub issues on `maximinl/CUPCase-humbleai`.
+
+| ID | Fix | Main | Small | Judge | Thinking | Diverse | Audit | max_tokens | Issue |
+|----|-----|------|-------|-------|:---:|:---:|:---:|:---:|:---:|
+| v11 | Thinking extraction | 27B bf16 | 27B bf16 | 27B bf16 | **on** | legacy | legacy | 4096 | [#1](https://github.com/maximinl/CUPCase-humbleai/issues/1) |
+| v12 | Diverse candidates | 27B bf16 | **9B bf16** | 27B bf16 | off | **differential** | legacy | 1024 | [#2](https://github.com/maximinl/CUPCase-humbleai/issues/2) |
+| v13 | Differential audit | 27B bf16 | **9B bf16** | 27B bf16 | off | **differential** | **differential** | 2048 | [#3](https://github.com/maximinl/CUPCase-humbleai/issues/3) |
+
+### Key comparisons (Phase 3)
+
+- **v11 vs v08**: Isolates thinking extraction fix (same config, fixed code)
+- **v12 vs v09**: Isolates diverse candidate generation (same models, new candidate strategy)
+- **v13 vs v12**: Isolates differential audit (same candidates, new audit prompt)
+- **v13 vs v07**: Full pipeline improvement (all fixes vs best baseline)
+
+### Memory budget (H200, 141GB VRAM)
+
+- v06: 27B bf16 judge only ≈ 54GB
+- v07: 27B bf16 × 2 (gen + judge reused) ≈ 54GB
+- v08: 27B bf16 × 2 ≈ 54GB (thinking just uses more tokens, not more VRAM)
+- v09: 27B bf16 + 9B bf16 + 27B judge (reuses main) ≈ 72GB
+- v10: 9B bf16 × 2 + 27B bf16 judge ≈ 72GB
+- v11: same as v08 ≈ 54GB (more tokens but same VRAM)
+- v12: same as v09 ≈ 72GB (more model calls but same memory)
+- v13: same as v09 ≈ 72GB
 
 ## Results (last updated: 2026-03-18)
 
+### Phase 1 results (9B judge — unreliable, awaiting v06 rejudge)
+
 | ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
 |----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
-| v01 | [ ] | — | — | — | — | — | — | — | — | |
-| v02 | [ ] | — | — | — | — | — | — | — | — | |
-| v03 | [ ] | — | — | — | — | — | — | — | — | |
-| v04 | [ ] | — | — | — | — | — | — | — | — | |
-| v05 | [ ] | — | — | — | — | — | — | — | — | |
-| v06 | [ ] | — | — | — | — | — | — | — | — | |
+| v01 | [X] | 50.0% | 50.0% | 50.0% | 50.0% | 60.0% | 60.0% | 60.0% | 60.0% | H100, 7s/case |
+| v02 | [X] | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | **INVALID** — judge used thinking, too lenient |
+| v03 | [X] | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 4bit, 10s/case |
+| v04 | [X] | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 8bit, 25s/case |
+| v05 | [X] | 70.0% | 70.0% | 70.0% | 70.0% | 50.0% | 50.0% | 50.0% | 50.0% | H200, 27B-4bit main, 25s/case |
+
+### Phase 2 results (27B bf16 judge — reliable)
+
+| ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
+|----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
+| v06 | [ ] | — | — | — | — | — | — | — | — | Rejudge of v01-v05 |
 | v07 | [ ] | — | — | — | — | — | — | — | — | |
 | v08 | [ ] | — | — | — | — | — | — | — | — | |
 | v09 | [ ] | — | — | — | — | — | — | — | — | |
 | v10 | [ ] | — | — | — | — | — | — | — | — | |
+
+### Phase 3 results (pipeline fixes)
+
+| ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
+|----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
+| v11 | [ ] | — | — | — | — | — | — | — | — | Issue #1: thinking fix |
+| v12 | [ ] | — | — | — | — | — | — | — | — | Issue #2: diverse candidates |
+| v13 | [ ] | — | — | — | — | — | — | — | — | Issue #3: differential audit |
 
 ### Status key
 
@@ -70,6 +123,21 @@ Previous runs OOM'd on L40S (46GB). Memory allocations use ~50% headroom:
 - `[X]` = done, results recorded
 - `[!]` = failed — see Notes column
 - `[R]` = running
+
+### Observations from Phase 1
+
+1. **v02 results are INVALID.** When `--enable-thinking` was global, the judge also used thinking
+   and became too lenient (100% across the board). Fixed in Phase 2 by separating
+   `--enable-thinking` (generation) from `--judge-thinking` (judge).
+
+2. **All 4 methods give identical scores** because main == small model in v01-v05.
+   No ensemble diversity → no ensemble benefit. v09 fixes this with 27B main + 9B small.
+
+3. **9B judge (no thinking) may be too strict.** 50-60% scores are lower than expected.
+   v06 will re-judge with 27B to see if the 9B judge was the bottleneck.
+
+4. **27B-4bit > 9B-bf16 on Easy** (70% vs 50%), but not on Hard (50% vs 60%).
+   v08 tests if 27B + thinking can improve Hard performance.
 
 ## Launch
 

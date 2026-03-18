@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=hf-9b
-#SBATCH --partition=mit_normal_gpu
+#SBATCH --partition=mit_preemptable
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
@@ -8,17 +8,22 @@
 #SBATCH --output=slurm-hf-9b-%j.out
 #SBATCH --error=slurm-hf-9b-%j.err
 
-# SAFEST: Qwen3.5-9B for everything (~20GB VRAM)
-# Single model = least likely to OOM or fail
-
 set -e
 cd /orcd/pool/005/sebasmos/code/CUPCase-humbleai
 module load cuda/12.4.0
 
-python3.11 -m pip install --user --upgrade \
-    transformers torch accelerate huggingface_hub \
-    bitsandbytes pandas tqdm nest_asyncio python-dotenv requests \
-    2>&1 | tail -5
+# Robust install: retry up to 3 times
+for i in 1 2 3; do
+    python3.11 -m pip install --user \
+        torch transformers accelerate huggingface_hub \
+        bitsandbytes pandas tqdm nest_asyncio python-dotenv requests \
+        2>&1 | tail -3 && break
+    echo "Install attempt $i failed, retrying..."
+    sleep 5
+done
+
+# Verify torch is importable
+python3.11 -c "import torch; print('torch OK:', torch.__version__)" || { echo "FATAL: torch not installed"; exit 1; }
 
 set -a; source .env; set +a
 
