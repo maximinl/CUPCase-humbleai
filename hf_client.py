@@ -6,6 +6,7 @@ Provides an OpenAI-compatible async interface for drop-in pipeline use.
 
 import asyncio
 import os
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -98,6 +99,7 @@ class HFClient:
         num_gpus: Optional[int] = None,
         trust_remote_code: bool = True,
         truncate_input_tokens: int = 4096,
+        **kwargs,
     ):
         self.model_name = model_name
         self.max_tokens = max_tokens
@@ -110,6 +112,7 @@ class HFClient:
         self.num_gpus = num_gpus
         self.trust_remote_code = trust_remote_code
         self.truncate_input_tokens = truncate_input_tokens
+        self.enable_thinking = kwargs.pop("enable_thinking", False)
 
         if self.quantize not in (None, "4bit", "8bit"):
             raise ValueError("quantize must be one of None, '4bit', or '8bit'")
@@ -198,7 +201,7 @@ class HFClient:
             model_kwargs["device_map"] = "auto"
             print("[HFClient] Using 4-bit quantization")
         else:
-            model_kwargs["torch_dtype"] = torch_dtype
+            model_kwargs["dtype"] = torch_dtype
             model_kwargs["device_map"] = device_map
 
         model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
@@ -265,14 +268,23 @@ class HFClient:
             hasattr(self._tokenizer, "chat_template")
             and self._tokenizer.chat_template is not None
         ):
+            chat_kwargs = dict(tokenize=False, add_generation_prompt=True)
+            if self.enable_thinking is not None:
+                chat_kwargs["enable_thinking"] = self.enable_thinking
             try:
                 return self._tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
+                    messages, **chat_kwargs,
+                )
+            except TypeError:
+                # Tokenizer doesn't support enable_thinking — drop it
+                chat_kwargs.pop("enable_thinking", None)
+                return self._tokenizer.apply_chat_template(
+                    messages, **chat_kwargs,
                 )
             except Exception:
                 normalized = self._normalize_messages(messages)
                 return self._tokenizer.apply_chat_template(
-                    normalized, tokenize=False, add_generation_prompt=True,
+                    normalized, **chat_kwargs,
                 )
 
         user_texts = []
@@ -318,7 +330,28 @@ class HFClient:
 
         input_len = inputs["input_ids"].shape[1]
         response_tokens = outputs[0][input_len:]
-        content = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+
+        # Decode WITH special tokens to detect <think> boundaries
+        raw_text = self._tokenizer.decode(response_tokens, skip_special_tokens=False)
+
+        # Strip <think>...</think> blocks (Qwen3.5 thinking mode)
+        if '<think>' in raw_text:
+            think_end = raw_text.rfind('</think>')
+            if think_end != -1:
+                # Take only the text AFTER the last </think>
+                content = raw_text[think_end + len('</think>'):]
+            else:
+                # Thinking was cut off by max_tokens — take text before <think>
+                content = raw_text.split('<think>')[0]
+        else:
+            content = raw_text
+
+        # Remove remaining special tokens (e.g., <|im_end|>, <|endoftext|>)
+        content = re.sub(r'<\|[^|]*\|>', '', content).strip()
+
+        # Fallback: if stripping left nothing, decode normally
+        if not content:
+            content = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
 
         prompt_tokens = int(input_len)
         completion_tokens = int(response_tokens.shape[0])

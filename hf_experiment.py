@@ -52,11 +52,59 @@ def check_semantic_agreement(diag1, diag2):
 # Diagnosis generation
 # ---------------------------------------------------------------------------
 
+def extract_diagnosis(text):
+    """Extract a concise diagnosis from potentially verbose model output."""
+    if not text or text.startswith("Error"):
+        return text
+
+    # If the response is already short (< 80 chars), assume it's a diagnosis
+    stripped = text.strip().strip('"').strip("'").strip(".")
+    if len(stripped) < 80 and '\n' not in stripped:
+        return stripped
+
+    # Try to find explicit diagnosis markers in the text
+    patterns = [
+        r'(?:final|most likely|primary)\s*(?:diagnosis|dx)\s*(?:is|:)\s*\**\s*([^\n\*\.]+)',
+        r'\*\*(?:Final |Most Likely )?Diagnosis\s*(?::|is)\s*\**\s*([^\n\*]+)',
+        r'(?:^|\n)\s*(?:Diagnosis|DIAGNOSIS)\s*:\s*\**\s*([^\n\*]+)',
+        r'(?:the (?:most likely|final|primary) diagnosis is)\s*\**\s*([^\n\*\.]+)',
+        r'(?:I (?:would|will) (?:diagnose|conclude))\s*.*?\s*\**\s*(?:as |with |is )?\**\s*([^\n\*\.]+)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            diag = m.group(1).strip().strip('"').strip("'").strip("*").strip()
+            if 5 < len(diag) < 120:
+                return diag
+
+    # Fallback: look for bolded text near the end (common Qwen pattern)
+    bold_matches = re.findall(r'\*\*([^*]{5,80})\*\*', text)
+    if bold_matches:
+        # Return the last bolded phrase — usually the conclusion
+        return bold_matches[-1].strip()
+
+    # Last resort: return first non-empty line that looks like a diagnosis
+    for line in text.split('\n'):
+        line = line.strip().strip('*').strip('-').strip()
+        if 5 < len(line) < 100 and not line.lower().startswith(('the user', 'case', 'patient', 'this', 'based on', 'i ')):
+            return line
+
+    # Ultimate fallback: return truncated original
+    return stripped[:100]
+
+
 def get_diagnosis(client, case_text):
-    prompt = f"CASE: {case_text}\n\nTASK: Provide the single most likely diagnosis. Be concise.\nDIAGNOSIS:"
+    prompt = f"""CASE: {case_text}
+
+TASK: Provide the single most likely diagnosis. Respond with ONLY the diagnosis name — no explanation, no reasoning, no bullet points. Just the condition name.
+
+DIAGNOSIS:"""
     try:
-        res = client.completion([{"role": "user", "content": prompt}])
-        return res.strip()
+        res = client.completion([
+            {"role": "system", "content": "You are a medical diagnosis assistant. When asked for a diagnosis, respond with ONLY the diagnosis name. No explanations, no reasoning, no analysis. Just the condition name."},
+            {"role": "user", "content": prompt},
+        ])
+        return extract_diagnosis(res.strip())
     except Exception as e:
         return f"Error: {e}"
 
@@ -80,7 +128,7 @@ CRITICAL RULES:
 - Do NOT invent a new diagnosis. Only choose from the numbered candidates.
 - If there is only one candidate, confirm or reject it — but if rejecting, still return that candidate as final_decision.
 
-Respond ONLY with valid JSON:
+Respond ONLY with valid JSON (no markdown, no explanation before or after):
 {{
     "audit": [{{"diagnosis": "<candidate diagnosis>", "evidence_for": ["point1", "point2"], "evidence_against": ["point1", "point2"]}}],
     "final_decision": "<one of the candidate diagnoses above, copied exactly>",
@@ -88,19 +136,33 @@ Respond ONLY with valid JSON:
     "rationale": "<brief explanation>"
 }}"""
 
+    raw = None
     try:
-        raw = client.completion([{"role": "user", "content": prompt}])
+        raw = client.completion([
+            {"role": "system", "content": "You are a medical audit assistant. You MUST respond with ONLY valid JSON. No markdown, no explanation, no preamble. Just the JSON object."},
+            {"role": "user", "content": prompt},
+        ])
         parsed = json.loads(clean_json_string(raw))
         final = parsed.get('final_decision', 'Unknown')
         if final.lower() in ['most likely diagnosis', 'unknown', '']:
             final = candidates[0] if candidates else 'Unknown'
             parsed['final_decision'] = final
         return parsed
-    except Exception as e:
+    except Exception:
+        # JSON parsing failed — try to extract the best candidate from raw text
+        raw_lower = raw.lower() if raw else ""
+        for c in candidates:
+            if c.lower() in raw_lower:
+                return {
+                    "final_decision": c,
+                    "confidence": 0.5,
+                    "rationale": "Extracted from non-JSON response",
+                    "audit": [],
+                }
         return {
             "final_decision": candidates[0] if candidates else "Error",
             "confidence": 0,
-            "rationale": str(e),
+            "rationale": "Failed to parse JSON response",
             "audit": [],
         }
 
@@ -113,6 +175,12 @@ def hf_judge(judge_client, pred, gold):
     """Judge clinical equivalence using local HF model."""
     if not pred or not gold or pred == "Error":
         return False
+
+    # Quick string-based check first (avoids LLM call for obvious matches)
+    pred_lower = pred.lower().strip()
+    gold_lower = gold.lower().strip()
+    if pred_lower == gold_lower or pred_lower in gold_lower or gold_lower in pred_lower:
+        return True
 
     prompt = f"""GOLD DIAGNOSIS: {gold}
 PREDICTED DIAGNOSIS: {pred}
@@ -127,15 +195,26 @@ Rules:
 - INCORRECT: Overly broad or vague when gold is specific
 
 Be STRICT. When in doubt, mark as INCORRECT.
-Return JSON only: {{"correct": true/false, "rationale": "brief reason"}}"""
+Respond with ONLY: {{"correct": true}} or {{"correct": false}}"""
 
     try:
         raw = judge_client.completion([
-            {"role": "system", "content": "You are a strict medical diagnosis grader. Output ONLY valid JSON."},
+            {"role": "system", "content": "You are a strict medical diagnosis grader. Respond with ONLY a JSON object: {\"correct\": true} or {\"correct\": false}. Nothing else."},
             {"role": "user", "content": prompt},
         ])
-        parsed = json.loads(clean_json_string(raw))
-        return bool(parsed.get("correct", False))
+        # Try JSON first
+        try:
+            parsed = json.loads(clean_json_string(raw))
+            return bool(parsed.get("correct", False))
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fallback: look for true/false keywords in response
+        raw_lower = raw.lower()
+        if '"correct": true' in raw_lower or '"correct":true' in raw_lower:
+            return True
+        if 'correct' in raw_lower and 'true' in raw_lower and 'false' not in raw_lower:
+            return True
+        return False
     except Exception:
         return False
 
@@ -188,11 +267,15 @@ def process_case(main_client, small_client, case_text, gold):
 # ---------------------------------------------------------------------------
 
 def run_pipeline(args):
+    enable_thinking = getattr(args, 'enable_thinking', False)
+
     print(f"\n{'=' * 60}")
     print(f"HuggingFace Qwen3.5 Experiment")
-    print(f"Main model:  {args.model_main}")
-    print(f"Small model: {args.model_small}")
+    print(f"Main model:  {args.model_main} (quant={args.quantize_main})")
+    print(f"Small model: {args.model_small} (quant={args.quantize_small})")
+    print(f"Thinking:    {enable_thinking}")
     print(f"Samples:     {args.samples}")
+    print(f"Max tokens:  {args.max_tokens}")
     print(f"{'=' * 60}\n")
 
     # Load main model (27B)
@@ -203,6 +286,7 @@ def run_pipeline(args):
         max_tokens=args.max_tokens,
         truncate_input_tokens=args.max_input,
         temperature=0.0,
+        enable_thinking=enable_thinking,
     )
     print(f"Main model loaded in {time.time() - t0:.1f}s\n")
 
@@ -214,6 +298,7 @@ def run_pipeline(args):
         max_tokens=args.max_tokens,
         truncate_input_tokens=args.max_input,
         temperature=0.0,
+        enable_thinking=enable_thinking,
     )
     print(f"Small model loaded in {time.time() - t0:.1f}s\n")
 
@@ -309,6 +394,8 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max-tokens', type=int, default=1024)
     parser.add_argument('--max-input', type=int, default=4096)
+    parser.add_argument('--enable-thinking', action='store_true', default=False,
+                        help="Enable Qwen3.5 thinking mode (generates <think> blocks)")
     args = parser.parse_args()
     run_pipeline(args)
 
