@@ -160,16 +160,44 @@ Same generation outputs as Phase 1, re-evaluated by 27B bf16 judge (semantic mat
 7. **Ensemble (v09) shows no benefit over single-model (v07)** — identical scores. Candidate
    lists are still length-1 (no diversity). Phase 3 v12 addresses this.
 
+## Phase 4: N=100 scale-up (pending v08/v10 resubmission results)
+
+Top 4 configs from Phase 1-2, all with 27B bf16 judge, scaled to N=100 for statistical confidence.
+
+| ID | Main | Thinking | Judge | Time limit | SLURM script | What it tests |
+|----|------|:---:|-------|:---:|-------------|---------------|
+| v07-n100 | 27B bf16 | off | 27B bf16 | 3h | `run_v07_n100.sh` | Best quality baseline |
+| v08-n100 | 27B bf16 | **on** | 27B bf16 | 18h | `run_v08_n100.sh` | Does CoT help 27B? |
+| v09-n100 | 27B bf16 + 9B bf16 | off | 27B bf16 | 3h | `run_v09_n100.sh` | True ensemble |
+| v10-n100 | 9B bf16 | **on** | 27B bf16 | 18h | `run_v10_n100.sh` | Cheapest good config? |
+
+**Prerequisite:** v08/v10 N=10 resubmissions (jobs 10685418/10685419) must finish successfully
+with the thinking header fix (commit `214a9d8`) before launching N=100.
+
+**Launch (after confirming fix works):**
+```bash
+cd /orcd/pool/005/sebasmos/code/CUPCase-humbleai
+sbatch slurm-hf/run_v07_n100.sh
+sbatch slurm-hf/run_v08_n100.sh
+sbatch slurm-hf/run_v09_n100.sh
+sbatch slurm-hf/run_v10_n100.sh
+```
+
+**Output:** `output-hf/vXX-n100-{description}/qwen35_{easy,hard}_100.csv`
+
 ## Launch
 
 ```bash
 cd /orcd/pool/005/sebasmos/code/CUPCase-humbleai
 
-# Launch all 10
-bash slurm-hf/launch_all.sh
+# Phase 1-3 (N=10)
+bash slurm-hf/launch_all.sh   # or individually: sbatch slurm-hf/run_v01.sh
 
-# Or launch individually
-sbatch slurm-hf/run_v01.sh
+# Phase 4 (N=100) — after v08/v10 fix confirmed
+sbatch slurm-hf/run_v07_n100.sh
+sbatch slurm-hf/run_v08_n100.sh
+sbatch slurm-hf/run_v09_n100.sh
+sbatch slurm-hf/run_v10_n100.sh
 
 # Monitor
 squeue -u $USER | grep hf-v
@@ -178,5 +206,5 @@ squeue -u $USER | grep hf-v
 ## Output
 
 Each variant writes to `output-hf/vXX-{description}/`:
-- `qwen35_easy_10.csv` — raw pipeline results on Easy dataset
-- `qwen35_hard_10.csv` — raw pipeline results on Hard dataset
+- `qwen35_easy_{N}.csv` — raw pipeline results on Easy dataset
+- `qwen35_hard_{N}.csv` — raw pipeline results on Hard dataset
