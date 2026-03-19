@@ -87,29 +87,43 @@ Each tests a specific fix from the GitHub issues on `maximinl/CUPCase-humbleai`.
 - v12: same as v09 ≈ 72GB (more model calls but same memory)
 - v13: same as v09 ≈ 72GB
 
-## Results (last updated: 2026-03-18)
+## Results (last updated: 2026-03-19)
 
-### Phase 1 results (9B judge — unreliable, awaiting v06 rejudge)
+### Phase 1 results (9B judge — unreliable)
+
+Scored by 9B judge (no thinking). All methods give identical scores because main == small model.
 
 | ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
 |----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
 | v01 | [X] | 50.0% | 50.0% | 50.0% | 50.0% | 60.0% | 60.0% | 60.0% | 60.0% | H100, 7s/case |
-| v02 | [X] | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | **INVALID** — judge used thinking, too lenient |
+| v02 | [!] | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | ~~100%~~ | **INVALID** — thinking token leak: outputs are `"Output Generation:"` not diagnoses |
 | v03 | [X] | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 50.0% | 4bit, 10s/case |
 | v04 | [X] | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 60.0% | 8bit, 25s/case |
 | v05 | [X] | 70.0% | 70.0% | 70.0% | 70.0% | 50.0% | 50.0% | 50.0% | 50.0% | H200, 27B-4bit main, 25s/case |
+
+### Phase 1 rejudged by v06 (27B bf16 judge — reliable)
+
+Same generation outputs as Phase 1, re-evaluated by 27B bf16 judge (semantic matching, not exact).
+
+| ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
+|----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
+| v01 | [X] | 50.0% | 50.0% | 50.0% | 50.0% | 70.0% | 70.0% | 70.0% | 70.0% | Hard jumped 60→70% with better judge |
+| v02 | [!] | 10.0% | 10.0% | 10.0% | 10.0% | 50.0% | 50.0% | 50.0% | 50.0% | Thinking leak garbled outputs; 27B judge salvaged some |
+| v03 | [X] | 50.0% | 50.0% | 50.0% | 50.0% | 60.0% | 60.0% | 60.0% | 60.0% | Hard improved 50→60% |
+| v04 | [X] | 60.0% | 60.0% | 60.0% | 60.0% | 70.0% | 70.0% | 70.0% | 70.0% | Hard jumped 60→70% |
+| v05 | [X] | 70.0% | 70.0% | 70.0% | 70.0% | 60.0% | 60.0% | 60.0% | 60.0% | Hard improved 50→60% |
 
 ### Phase 2 results (27B bf16 judge — reliable)
 
 | ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
 |----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
-| v06 | [ ] | — | — | — | — | — | — | — | — | Rejudge of v01-v05 |
-| v07 | [ ] | — | — | — | — | — | — | — | — | |
-| v08 | [ ] | — | — | — | — | — | — | — | — | |
-| v09 | [ ] | — | — | — | — | — | — | — | — | |
-| v10 | [ ] | — | — | — | — | — | — | — | — | |
+| v06 | [X] | — | — | — | — | — | — | — | — | Rejudge only (no generation), see table above |
+| v07 | [X] | 70.0% | 70.0% | 70.0% | 70.0% | 0.0% | 0.0% | 0.0% | 0.0% | Best Easy; Hard=0% (exact match, diagnoses close but not identical) |
+| v08 | [R] | 10.0% | 10.0% | 10.0% | 10.0% | — | — | — | — | **Thinking leak again**: outputs are `"Construct Final Response:"`. Hard running. |
+| v09 | [X] | 70.0% | 70.0% | 70.0% | 70.0% | 0.0% | 0.0% | 0.0% | 0.0% | True ensemble (27B+9B) — same Easy as v07, Hard=0% exact match |
+| v10 | [!] | 20.0% | 20.0% | 20.0% | 20.0% | 10.0% | 10.0% | 10.0% | 10.0% | **Thinking leak**: outputs are `"Draft Output:"`. 9B+thinking broken. |
 
-### Phase 3 results (pipeline fixes)
+### Phase 3 results (pipeline fixes — not started)
 
 | ID | Status | Easy Baseline | Easy Ensemble | Easy Audit | Easy Hybrid | Hard Baseline | Hard Ensemble | Hard Audit | Hard Hybrid | Notes |
 |----|:------:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|-------|
@@ -119,25 +133,32 @@ Each tests a specific fix from the GitHub issues on `maximinl/CUPCase-humbleai`.
 
 ### Status key
 
-- `[ ]` = submitted / pending
+- `[ ]` = not started
 - `[X]` = done, results recorded
-- `[!]` = failed — see Notes column
+- `[!]` = failed / broken — see Notes column
 - `[R]` = running
 
-### Observations from Phase 1
+### Observations
 
-1. **v02 results are INVALID.** When `--enable-thinking` was global, the judge also used thinking
-   and became too lenient (100% across the board). Fixed in Phase 2 by separating
-   `--enable-thinking` (generation) from `--judge-thinking` (judge).
-
+**Phase 1:**
+1. **v02 results are INVALID.** Thinking token leak: outputs are garbage strings like `"Output Generation:"`.
+   Fixed in Phase 2 by separating `--enable-thinking` (generation) from `--judge-thinking` (judge).
 2. **All 4 methods give identical scores** because main == small model in v01-v05.
    No ensemble diversity → no ensemble benefit. v09 fixes this with 27B main + 9B small.
+3. **v06 rejudge shows 9B judge was too strict on Hard** — scores improved 10-20% with 27B judge
+   (semantic matching catches near-miss diagnoses that exact match misses).
+4. **27B-4bit (v05) best Easy at 70%**, 8bit (v04) best Hard at 70% (rejudged).
 
-3. **9B judge (no thinking) may be too strict.** 50-60% scores are lower than expected.
-   v06 will re-judge with 27B to see if the 9B judge was the bottleneck.
-
-4. **27B-4bit > 9B-bf16 on Easy** (70% vs 50%), but not on Hard (50% vs 60%).
-   v08 tests if 27B + thinking can improve Hard performance.
+**Phase 2:**
+5. **Thinking token leak is NOT fixed for v08/v10.** Despite the Phase 2 fix separating gen/judge
+   thinking, the `hf_client.py` thinking extraction still fails — outputs like `"Construct Final
+   Response:"` and `"Draft Output:"` leak through instead of actual diagnoses. **Phase 3 v11
+   specifically targets this bug.**
+6. **v07 and v09 match on Easy (70%)** but both score 0% Hard on exact match. The 27B judge in
+   v06 rejudge scored similar configs at 60-70% Hard — the issue is exact-match scoring, not model
+   quality. The actual diagnoses are close but not string-identical to gold labels.
+7. **Ensemble (v09) shows no benefit over single-model (v07)** — identical scores. Candidate
+   lists are still length-1 (no diversity). Phase 3 v12 addresses this.
 
 ## Launch
 

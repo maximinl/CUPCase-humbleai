@@ -358,14 +358,24 @@ class HFClient:
         # Remove remaining special tokens (e.g., <|im_end|>, <|endoftext|>)
         content = re.sub(r'<\|[^|]*\|>', '', content).strip()
 
-        # Filter garbage patterns (residual thinking headers)
-        _GARBAGE_RE = re.compile(
+        # Strip residual thinking headers that leak past </think>.
+        # Qwen3.5 sometimes emits "Construct Final Response:\n<actual answer>"
+        # or just "Draft Output:" with no answer following.  We strip known
+        # header lines from the front so the real answer (if any) survives.
+        _HEADER_LINE_RE = re.compile(
             r'^(?:Output Generation|Thinking Process|Evaluate Clinical Features|'
-            r'Construct Final String|Final Check|Step \d|Analysis|Summary):?\s*$',
+            r'Construct Final (?:String|Response|Answer|Output)|Final Check|'
+            r'Draft(?:ing)?\s*(?:Output|Response)|Selection|Select Term|'
+            r'Step \d|Analysis|Summary|Response|Answer|Diagnosis|'
+            r'Clinical (?:Assessment|Impression)):?\s*$',
             re.IGNORECASE,
         )
-        if content and _GARBAGE_RE.match(content):
-            content = ""
+        # Peel off leading header lines, keep the rest
+        if content:
+            lines = content.split('\n')
+            while lines and _HEADER_LINE_RE.match(lines[0].strip()):
+                lines.pop(0)
+            content = '\n'.join(lines).strip()
 
         # Fallback: extract diagnosis from thinking block if answer is empty
         if not content and thinking_content:
