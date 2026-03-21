@@ -18,11 +18,10 @@ def clean_json_string(s):
     start, end = s.find('{'), s.rfind('}')
     return s[start:end+1] if start != -1 and end != -1 else s.strip()
 
-async def perform_audit(case_text, candidates):
-    """Stage 2: For/against reasoning on candidates."""
-    candidate_str = "\n".join([f"{i+1}. {c}" for i, c in enumerate(candidates)])
 
-    prompt = f"""CASE: {case_text}
+def _build_legacy_audit_prompt(case_text, candidates):
+    candidate_str = "\n".join([f"{i+1}. {c}" for i, c in enumerate(candidates)])
+    return f"""CASE: {case_text}
 
 CANDIDATE DIAGNOSES:
 {candidate_str}
@@ -42,28 +41,77 @@ Respond ONLY with valid JSON:
     "rationale": "<brief explanation>"
 }}"""
 
+
+def _build_differential_audit_prompt(case_text, candidates):
+    candidate_str = "\n".join([f"{i+1}. {c}" for i, c in enumerate(candidates)])
+    return f"""CASE: {case_text}
+
+INITIAL CANDIDATE DIAGNOSES:
+{candidate_str}
+
+TASK: Perform a differential diagnosis audit.
+
+STEP 1 — COUNTER-HYPOTHESES: For each candidate above, propose 2 alternative diagnoses that could also explain this clinical presentation.
+
+STEP 2 — COMPARATIVE EVALUATION: For ALL diagnoses (initial candidates + your alternatives), evaluate:
+  a) Which clinical findings SUPPORT this diagnosis?
+  b) Which clinical findings ARGUE AGAINST this diagnosis?
+  c) Are there expected findings for this diagnosis that are ABSENT from the case?
+
+STEP 3 — FINAL DECISION: Select the single best-supported diagnosis from ALL considered options (initial candidates OR your alternatives). You are NOT limited to the initial candidates.
+
+Respond ONLY with valid JSON:
+{{
+    "counter_hypotheses": [
+        {{"original": "<candidate>", "alternatives": ["<alt1>", "<alt2>"]}}
+    ],
+    "evaluation": [
+        {{"diagnosis": "<name>", "evidence_for": ["..."], "evidence_against": ["..."], "missing_findings": ["..."]}}
+    ],
+    "final_decision": "<best-supported diagnosis>",
+    "confidence": <0.0 to 1.0>,
+    "rationale": "<why this diagnosis is best supported compared to alternatives>"
+}}"""
+
+
+async def perform_audit(case_text, candidates, mode="legacy"):
+    """Stage 2 audit in legacy or differential mode."""
+    prompt = (
+        _build_differential_audit_prompt(case_text, candidates)
+        if mode == "differential"
+        else _build_legacy_audit_prompt(case_text, candidates)
+    )
+    system_prompt = (
+        "You are a medical differential diagnosis expert. Systematically evaluate all diagnostic possibilities. Respond with ONLY valid JSON."
+        if mode == "differential"
+        else "You are a medical audit assistant. You MUST respond with ONLY valid JSON. No markdown, no explanation, no preamble. Just the JSON object."
+    )
+
     async with sem:
         try:
             res = await openai_client.chat.completions.create(
                 model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
                 response_format={"type": "json_object"},
                 temperature=0
             )
             parsed = json.loads(clean_json_string(res.choices[0].message.content))
-            
-            # Fallback if model still returns placeholder
+
             final = parsed.get('final_decision', 'Unknown')
             if final.lower() in ['most likely diagnosis', 'unknown', '']:
-                # Use first candidate as fallback
                 final = candidates[0] if candidates else 'Unknown'
                 parsed['final_decision'] = final
-            
+
             return parsed
         except Exception as e:
-            return {"final_decision": candidates[0] if candidates else "Error", "confidence": 0, "rationale": str(e), "audit": []}
+            empty_key = "evaluation" if mode == "differential" else "audit"
+            return {"final_decision": candidates[0] if candidates else "Error", "confidence": 0, "rationale": str(e), empty_key: []}
 
-async def process_case(case_id, row):
+
+async def process_case(case_id, row, audit_mode="legacy"):
     case_text = row.get('clean text') or row.get('100%') or ""
     gold = row.get('final diagnosis') or row.get('gold') or 'Unknown'
     
@@ -79,9 +127,9 @@ async def process_case(case_id, row):
             candidates = ["Unknown"]
     else:
         candidates = ["Unknown"]
-    
-    audit = await perform_audit(case_text, candidates)
-    
+
+    audit = await perform_audit(case_text, candidates, mode=audit_mode)
+
     return {
         'case_id': case_id,
         'gold': gold,
@@ -90,7 +138,8 @@ async def process_case(case_id, row):
         'final_diagnosis': audit.get('final_decision', 'Unknown'),
         'audit_confidence': audit.get('confidence', 0),
         'audit_rationale': audit.get('rationale', ''),
-        'audit_details': json.dumps(audit.get('audit', []))
+        'audit_details': json.dumps(audit.get('audit', audit.get('evaluation', []))),
+        'counter_hypotheses': json.dumps(audit.get('counter_hypotheses', [])),
     }
 
 async def main(args):
@@ -106,7 +155,7 @@ async def main(args):
     
     print(f"Stage 2: Processing {len(df)} cases (Audit)...")
     
-    tasks = [process_case(row.get('case_id', idx), row) for idx, row in df.iterrows()]
+    tasks = [process_case(row.get('case_id', idx), row, audit_mode=args.audit_mode) for idx, row in df.iterrows()]
     results = []
     async for f in async_tqdm(asyncio.as_completed(tasks), total=len(tasks)):
         results.append(await f)
@@ -130,6 +179,8 @@ if __name__ == "__main__":
     parser.add_argument('--output-dir', default='results')
     parser.add_argument('--samples', type=int, default=None)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--audit-mode', type=str, default='legacy',
+                        choices=['legacy', 'differential'])
     args = parser.parse_args()
     
     if not args.ensemble_results and not args.data_path:
