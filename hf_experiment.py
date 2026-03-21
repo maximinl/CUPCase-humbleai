@@ -135,6 +135,36 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         return [get_diagnosis(client, case_text)]
 
 
+def get_distinct_differential(client, case_text, excluded, n=3):
+    """Ask for alternatives that differ from the excluded diagnoses."""
+    excluded_list = [d for d in excluded if d and not str(d).startswith("Error")]
+    excluded_str = "\n".join([f"- {d}" for d in excluded_list]) or "- None provided"
+    prompt = f"""CASE: {case_text}
+
+EXCLUDE THESE DIAGNOSES:
+{excluded_str}
+
+TASK: Provide the top {n} most likely ALTERNATIVE diagnoses that are clinically plausible for this case and meaningfully distinct from the excluded diagnoses above.
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{{"diagnoses": ["alternative diagnosis 1", "alternative diagnosis 2", "alternative diagnosis 3"]}}"""
+    try:
+        res = client.completion([
+            {"role": "system", "content": "You are a medical diagnosis assistant. Respond with ONLY a JSON object containing a 'diagnoses' array of diagnosis names that are distinct from the excluded diagnoses."},
+            {"role": "user", "content": prompt},
+        ])
+        parsed = json.loads(clean_json_string(res.strip()))
+        diagnoses = parsed.get('diagnoses', [])
+        cleaned = []
+        for d in diagnoses:
+            d = str(d).strip().strip('"\'.')
+            if 3 < len(d) < 120 and not any(check_semantic_agreement(d, ex) for ex in excluded_list):
+                cleaned.append(d)
+        return cleaned
+    except Exception:
+        return []
+
+
 def deduplicate_candidates(candidates):
     """Remove semantically duplicate candidates."""
     unique = []
@@ -148,6 +178,21 @@ def deduplicate_candidates(candidates):
                 break
         if not is_dup:
             unique.append(c)
+    return unique
+
+
+def ensure_diverse_candidates(main_client, small_client, case_text, candidates, min_candidates=2):
+    """Backfill distinct alternatives when initial differential generation collapses."""
+    unique = deduplicate_candidates(candidates)
+    if len(unique) >= min_candidates:
+        return unique
+
+    for client in (main_client, small_client):
+        extras = get_distinct_differential(client, case_text, unique, n=3)
+        if extras:
+            unique = deduplicate_candidates(unique + extras)
+        if len(unique) >= min_candidates:
+            break
     return unique
 
 
@@ -364,10 +409,17 @@ def process_case(main_client, small_client, case_text, gold,
         main_diffs = get_differential(main_client, case_text, n=3)
         small_diffs = get_differential(small_client, case_text, n=3)
         all_candidates = main_diffs + small_diffs
-        ensemble_candidates = deduplicate_candidates(all_candidates)
+        ensemble_candidates = ensure_diverse_candidates(
+            main_client,
+            small_client,
+            case_text,
+            all_candidates,
+            min_candidates=2,
+        )
         # Ensure baseline's top pick is first
         if baseline not in ensemble_candidates:
             ensemble_candidates.insert(0, baseline)
+            ensemble_candidates = deduplicate_candidates(ensemble_candidates)
         ensemble_final = ensemble_candidates[0]
         small_diag = small_diffs[0] if small_diffs else ""
         agreement = len(ensemble_candidates) == 1
