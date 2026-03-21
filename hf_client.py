@@ -90,6 +90,7 @@ class HFClient:
         self,
         model_name: str,
         max_tokens: int = 1024,
+        thinking_budget: Optional[int] = None,
         temperature: float = 0.0,
         top_p: float = 0.95,
         top_k: int = 50,
@@ -103,6 +104,7 @@ class HFClient:
     ):
         self.model_name = model_name
         self.max_tokens = max_tokens
+        self.thinking_budget = thinking_budget
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
@@ -116,6 +118,8 @@ class HFClient:
 
         if self.quantize not in (None, "4bit", "8bit"):
             raise ValueError("quantize must be one of None, '4bit', or '8bit'")
+        if self.thinking_budget is not None and self.thinking_budget <= 0:
+            raise ValueError("thinking_budget must be a positive integer")
 
         # Usage tracking
         self.model_call_counts: dict[str, int] = defaultdict(int)
@@ -316,7 +320,8 @@ class HFClient:
         # Thinking mode needs more tokens: thinking block + answer
         effective_max_tokens = self.max_tokens
         if self.enable_thinking:
-            effective_max_tokens = max(self.max_tokens, 4096)
+            target_budget = self.thinking_budget or 4096
+            effective_max_tokens = max(self.max_tokens, target_budget)
 
         gen_kwargs = {
             "max_new_tokens": effective_max_tokens,

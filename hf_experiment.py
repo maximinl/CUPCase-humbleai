@@ -431,6 +431,8 @@ def run_pipeline(args):
     print(f"Audit mode:  {audit_mode}")
     print(f"Samples:     {args.samples}")
     print(f"Max tokens:  {args.max_tokens}")
+    if enable_thinking:
+        print(f"Think budget:{args.thinking_budget}")
     print(f"{'=' * 60}\n")
 
     # Load main model (27B)
@@ -439,6 +441,7 @@ def run_pipeline(args):
         model_name=args.model_main,
         quantize=args.quantize_main,
         max_tokens=args.max_tokens,
+        thinking_budget=args.thinking_budget,
         truncate_input_tokens=args.max_input,
         temperature=0.0,
         enable_thinking=enable_thinking,
@@ -451,6 +454,7 @@ def run_pipeline(args):
         model_name=args.model_small,
         quantize=args.quantize_small,
         max_tokens=args.max_tokens,
+        thinking_budget=args.thinking_budget,
         truncate_input_tokens=args.max_input,
         temperature=0.0,
         enable_thinking=enable_thinking,
@@ -468,6 +472,7 @@ def run_pipeline(args):
             model_name=judge_model,
             quantize=judge_quant,
             max_tokens=args.max_tokens,
+            thinking_budget=args.thinking_budget,
             truncate_input_tokens=args.max_input,
             temperature=0.0,
             enable_thinking=judge_thinking,
@@ -574,6 +579,8 @@ def main():
     parser.add_argument('--samples', type=int, default=10)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max-tokens', type=int, default=1024)
+    parser.add_argument('--thinking-budget', type=int, default=4096,
+                        help="Minimum generation budget to reserve when --enable-thinking is on")
     parser.add_argument('--max-input', type=int, default=4096)
     parser.add_argument('--enable-thinking', action='store_true', default=False,
                         help="Enable Qwen3.5 thinking mode (generates <think> blocks)")
