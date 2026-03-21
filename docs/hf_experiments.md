@@ -16,8 +16,8 @@ Previous runs on L40S (46GB) OOM'd for 27B models. Switched to larger GPUs on 20
    without initializing it, crashing when `client.completion()` itself raised an exception.
    Fixed by initializing `raw = None` before the try block.
 3. **`enable_thinking` flag** — Added CLI `--enable-thinking` to control whether Qwen3.5 uses
-   its chain-of-thought reasoning mode. When enabled, `max_tokens` should be increased to 2048+
-   to leave room for the answer after thinking.
+   its chain-of-thought reasoning mode. When enabled, use `--thinking-budget` (default `4096`)
+   to reserve enough generation budget for the answer after the `<think>` block.
 
 ## Experiment Matrix (13 variants)
 
